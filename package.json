@@ -1,0 +1,45 @@
+{
+  "name": "koishi-plugin-qq-chat",
+  "version": "2.2.0",
+  "description": "夺舍 QQ 官方机器人：在 Koishi 控制台直接接管官方 QQ 机器人的群聊",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "client",
+    "dist",
+    "src/types"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT",                  
+  "homepage": "https://github.com/maimai993/koishi-plugin-qq-chat",       
+  "repository": {                          
+    "type": "git",
+    "url": "git+https://github.com/maimai993/koishi-plugin-qq-chat.git"
+  },
+  "keywords": ["webui"],                  
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.11.0",
+    "koishi": "^4.16.0",
+    "koishi-plugin-adapter-qq-crack": "^1.0.25"
+  },
+  "devDependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "@koishijs/client": "^5.11.0",
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^20.19.43",
+    "autoprefixer": "^10.4.23",
+    "element-plus": "^2.13.0",
+    "koishi": "^4.16.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "mime-types": "^3.0.2"
+  }
+}
