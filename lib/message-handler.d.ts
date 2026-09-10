@@ -14,6 +14,10 @@ export declare class MessageHandler {
     private lastChannelRefreshAt;
     private readonly CHANNEL_REFRESH_TTL_MS;
     constructor(ctx: Context, config: Config, fileManager: FileManager, logger: PluginLogger);
+    /** 广播带 authority：启用 auth 插件后未登录的客户端收不到聊天内容 */
+    private broadcast;
+    private isAtBotMessage;
+    private stripLeadingAtSelf;
     recordUserMessage(session: Session, timestamp: number): void;
     recordBotMessage(session: Session, timestamp: number): void;
     recordGroupMemberEvent(session: Session, kind: 'added' | 'removed'): void;
@@ -22,6 +26,9 @@ export declare class MessageHandler {
     private processJoinRequestEvent;
     setCorrectChannelId(selfId: string, channelId: string): void;
     getCorrectChannelId(selfId: string): string | undefined;
+    private isRawIdName;
+    private resolveBotName;
+    private resolveBotAvatar;
     updateBotInfoToFile(session: Session): void;
     updateChannelInfoToFile(session: Session): string;
     downloadAndCacheMedia(url: string, type: 'image' | 'media' | 'avatar' | 'audio', prefetchedBuffer?: Buffer): Promise<string>;

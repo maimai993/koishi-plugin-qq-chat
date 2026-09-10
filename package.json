@@ -1,43 +1,83 @@
 {
   "name": "koishi-plugin-qq-chat",
-  "version": "2.2.0",
-  "description": "夺舍 QQ 官方机器人：在 Koishi 控制台直接接管官方 QQ 机器人的群聊",
+  "version": "3.0.0",
+  "contributors": [
+    "maimai <2237886846@qq.com>"
+  ],
+  "description": "夺舍 QQ 官方机器人：在 Koishi 控制台直接接管官方 QQ 机器人的群聊，内置沙盒窗口、指令桥接、媒体收发与群管理（支持 auth 插件登录保护）",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
+    "src",
     "client",
     "dist",
-    "src/types"
+    "screenshots",
+    "readme.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:console": "koishi-console build .",
+    "build:window": "node build-standalone.mjs",
+    "build:client": "npm run build:console && npm run build:window",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run build:client"
   },
-  "license": "MIT",                  
-  "homepage": "https://github.com/maimai993/koishi-plugin-qq-chat",       
-  "repository": {                          
+  "license": "MIT",
+  "homepage": "https://github.com/maimai993/koishi-plugin-qq-chat",
+  "repository": {
     "type": "git",
     "url": "git+https://github.com/maimai993/koishi-plugin-qq-chat.git"
   },
-  "keywords": ["webui"],                  
+  "bugs": {
+    "url": "https://github.com/maimai993/koishi-plugin-qq-chat/issues"
+  },
+  "keywords": [
+    "webui",
+    "chat",
+    "qq",
+    "sandbox",
+    "console",
+    "koishi-plugin"
+  ],
   "peerDependencies": {
     "@koishijs/plugin-console": "^5.11.0",
     "koishi": "^4.16.0",
-    "koishi-plugin-adapter-qq-crack": "^1.0.25"
+    "koishi-plugin-adapter-qq-crack": "^1.0.25",
+    "koishi-plugin-assets-qqbot-part-file": "^0.1.2"
+  },
+  "peerDependenciesMeta": {
+    "koishi-plugin-adapter-qq-crack": {
+      "optional": true
+    },
+    "koishi-plugin-assets-qqbot-part-file": {
+      "optional": true
+    }
+  },
+  "koishi": {
+    "description": {
+      "zh": "在 Koishi 控制台接管官方 QQ 机器人的群聊：聊天记录、图片 / 语音 / 视频 / 文件收发、群管理、独立窗口与沙盒模式一应俱全。启用 auth 插件后窗口与聊天媒体会自动要求登录。Markdown 面板的图片上传依赖 assets 服务（推荐 koishi-plugin-assets-qqbot-part-file）。"
+    },
+    "service": {
+      "optional": [
+        "assets"
+      ]
+    }
   },
   "devDependencies": {
     "@element-plus/icons-vue": "^2.3.2",
     "@koishijs/client": "^5.11.0",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^20.19.43",
+    "@vitejs/plugin-vue": "^5.2.4",
     "autoprefixer": "^10.4.23",
     "element-plus": "^2.13.0",
     "koishi": "^4.16.0",
     "postcss": "^8.5.6",
+    "sass": "^1.104.0",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vite": "^5.4.21"
   },
   "dependencies": {
     "mime-types": "^3.0.2"

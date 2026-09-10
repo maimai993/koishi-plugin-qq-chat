@@ -69,6 +69,10 @@ export interface MessageInfo {
   quote?: QuoteInfo
   sending?: boolean
   realId?: string
+  /** 该消息是否 @ 了机器人（群聊） */
+  atBot?: boolean
+  /** 沙盒窗口：只在本机出现过（尚未真的发到 QQ）的消息 */
+  sandbox?: boolean
 }
 
 export interface ChatData {
@@ -82,4 +86,18 @@ export interface PluginConfig {
   loggerinfo: boolean
   chatContainerHeight: number
   clearIndexedDBOnStart: boolean
+  /** 控制台指令桥接：/指令 是否本地执行并拦截输出 */
+  commandBridge?: boolean
+  /** 本地指令前缀 */
+  commandPrefix?: string
+  /** 主题：koishi=跟随控制台 / system=跟随系统 / dark=黑色 / light=白色 */
+  theme?: 'koishi' | 'system' | 'dark' | 'light'
+  /** 聊天区背景图（插件设置）：本地图片路径或 http(s) 链接 */
+  chatBackground?: string
+  /** 服务端解析后的可访问地址（本地文件会走 /qq-chat/background） */
+  chatBackgroundUrl?: string
+  /** 背景模糊 px */
+  chatBackgroundBlur?: number
+  /** 背景遮罩浓度 % */
+  chatBackgroundDim?: number
 }

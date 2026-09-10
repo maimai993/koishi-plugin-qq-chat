@@ -22,6 +22,28 @@ export function useChatData() {
   // 记录每个频道的分页状态
   const channelPagination = ref<Record<string, { offset: number, hasMore: boolean }>>({})
 
+  // 当前正在查看的频道（其它频道只保留少量消息，避免内存无限增长）
+  const activeChannelKey = ref('')
+  const setActiveChannel = (botId: string, channelId: string) => {
+    activeChannelKey.value = botId && channelId ? `${botId}:${channelId}` : ''
+  }
+  // 切换频道时卸载上一个频道的消息与分页状态
+  const unloadChannelMessages = (botId: string, channelId: string) => {
+    const key = `${botId}:${channelId}`
+    if (!key || key === ':') return
+    if (chatData.value.messages[key]) {
+      delete chatData.value.messages[key]
+      chatData.value = { ...chatData.value, messages: { ...chatData.value.messages } }
+    }
+    if (channelPagination.value[key]) {
+      const next = { ...channelPagination.value }
+      delete next[key]
+      channelPagination.value = next
+    }
+  }
+  // 非当前频道只保留最近 N 条（用于列表预览）
+  const KEEP_BEHIND = 30
+
   // 计算属性
   const bots = computed(() => {
     return Object.values(chatData.value.bots).sort((a, b) => {
@@ -176,10 +198,16 @@ export function useChatData() {
         isBot: msg.isBot || msg.type === 'bot-message' || msg.type === 'bot',
         type: msg.type === 'system' ? 'system' : msg.isBot || msg.type === 'bot' || msg.type === 'bot-message' || msg.type === 'bot-message-sent' ? 'bot' : 'user',
         systemType: msg.systemType || (msg.type === 'system' ? 'member' : undefined),
-        quote: msg.quote
+        quote: msg.quote,
+        // 沙盒窗口里只在本机出现过（未真的发到 QQ）的消息：界面据此显示「发送到当前频道」
+        sandbox: msg.sandbox
       }
       messages.push(newMsg)
       messages.sort((a, b) => a.timestamp - b.timestamp)
+      // 不是当前查看的频道：只留最近 30 条，供会话列表预览用，避免长时间挂机内存膨胀
+      if (key !== activeChannelKey.value && messages.length > KEEP_BEHIND) {
+        messages.splice(0, messages.length - KEEP_BEHIND)
+      }
     }
 
     // 强制触发响应式更新，确保列表实时刷新
@@ -231,6 +259,9 @@ export function useChatData() {
   return {
     chatData,
     pluginConfig,
+    activeChannelKey,
+    setActiveChannel,
+    unloadChannelMessages,
     pinnedBots,
     pinnedChannels,
     bots,

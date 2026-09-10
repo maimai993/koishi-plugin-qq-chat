@@ -28,6 +28,7 @@ export declare class FileManager {
     initialize(): Promise<void>;
     readChatDataFromFile(): ChatData;
     getCachedChannelInfo(selfId: string, channelId: string): ChannelInfo | undefined;
+    getCachedBotInfo(selfId: string): BotInfo | undefined;
     readMetadataOnly(): Promise<Omit<ChatData, 'messages'>>;
     upsertBotInfo(botInfo: BotInfo): Promise<void>;
     upsertChannelInfo(selfId: string, channelId: string, channelInfo: ChannelInfo): Promise<void>;

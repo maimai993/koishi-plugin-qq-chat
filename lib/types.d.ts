@@ -58,6 +58,8 @@ export interface MessageInfo {
     platform: string;
     quote?: QuoteInfo;
     isDirect?: boolean;
+    /** 群消息里是否 @ 了机器人（用于频道列表的「有人@你」提醒） */
+    atBot?: boolean;
     sending?: boolean;
     realId?: string;
 }
