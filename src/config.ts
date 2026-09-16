@@ -19,6 +19,7 @@ export interface Config {
   commandMaxLength: number
   commandEditRules: string
   loginRequired: boolean
+  mobilePassword: string
 }
 
 /**
@@ -63,6 +64,7 @@ export const Config: Schema<Config> = Schema.intersect([
 
   Schema.object({
     loginRequired: Schema.boolean().default(true).description('启用 auth 插件时，独立窗口 / 沙盒窗口与聊天媒体是否要求先登录控制台（关闭后这些地址将重新变为公开，仅建议内网调试时关闭）'),
+    mobilePassword: Schema.string().role('secret').default('').description('手机端 App / 手机 API 的访问密码（留空则跟随上面的访问控制：启用 auth 时可用控制台登录态，否则无需密码）。设置后，手机 App、/qq-chat/api/* 与手机端页面都要求先输入这个密码'),
   }).description('访问控制'),
 
   Schema.object({

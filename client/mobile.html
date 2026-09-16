@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0099ff" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="QQ 机器人" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <title>QQ 机器人手机端</title>
+    <script>window.KOISHI_CONFIG = {/*KOISHI_CONFIG*/}</script>
+    <script>
+      // 「添加到主屏幕」后以独立窗口运行：避免 iOS Safari 里被当成网页标签
+      if (navigator.standalone) document.documentElement.classList.add('standalone-app')
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./mobile.ts"></script>
+  </body>
+</html>

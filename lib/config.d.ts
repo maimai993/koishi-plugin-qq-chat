@@ -18,6 +18,7 @@ export interface Config {
     commandMaxLength: number;
     commandEditRules: string;
     loginRequired: boolean;
+    mobilePassword: string;
 }
 /**
  * 控制台监听 / 广播所需的权限等级（与插件页面一致）。

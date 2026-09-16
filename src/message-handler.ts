@@ -203,9 +203,17 @@ export class MessageHandler {
     }
   }
 
+  /** 手机端 SSE 推送中心（由 index.ts 注入）：网页端与手机端收到同一份广播 */
+  private mobileHub?: { broadcast: (name: string, body: any) => void }
+
+  setMobileHub(hub: { broadcast: (name: string, body: any) => void }) {
+    this.mobileHub = hub
+  }
+
   /** 广播带 authority：启用 auth 插件后未登录的客户端收不到聊天内容 */
   private broadcast(name: string, body: any) {
     ;(this.ctx.console as any).broadcast(name, body, { authority: CONSOLE_AUTHORITY })
+    this.mobileHub?.broadcast(name, body)
   }
 
   // 判断群消息是否 @ 了机器人：

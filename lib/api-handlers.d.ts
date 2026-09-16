@@ -25,6 +25,14 @@ export declare class ApiHandlers {
     private addListener;
     /** 广播也要带 authority，否则未登录的客户端能收到聊天内容 */
     private broadcast;
+    /** 手机端 API 用来复用这些监听器 */
+    private registry;
+    private mobileHub?;
+    getRegistry(): Record<string, (data: any) => any>;
+    /** 注册手机端 SSE 推送中心（由 index.ts 注入） */
+    setMobileHub(hub: {
+        broadcast: (name: string, body: any) => void;
+    }): void;
     safeDecode(value: any): any;
     reviveElements(source: any): any[];
     buildMediaMarkup(content: any, images: any, files: any): Promise<string>;

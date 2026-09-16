@@ -43,12 +43,31 @@ export class ApiHandlers {
    * 没启用 auth 插件时 Koishi 不做拦截，行为与以前一致。
    */
   private addListener(name: string, callback: (data: any) => any) {
+    // 顺手登记一份：手机端 App 通过 /qq-chat/api/rpc 调用的就是这些监听器，
+    // 网页端与手机端因此共用同一套后端逻辑（不用写两遍）
+    this.registry[name] = callback
     ;(this.ctx.console as any).addListener(name, callback, { authority: CONSOLE_AUTHORITY })
   }
 
   /** 广播也要带 authority，否则未登录的客户端能收到聊天内容 */
   private broadcast(name: string, body: any) {
     ;(this.ctx.console as any).broadcast(name, body, { authority: CONSOLE_AUTHORITY })
+    // 同步推给手机端（SSE）
+    this.mobileHub?.broadcast(name, body)
+  }
+
+  /** 手机端 API 用来复用这些监听器 */
+  private registry: Record<string, (data: any) => any> = {}
+
+  private mobileHub?: { broadcast: (name: string, body: any) => void }
+
+  getRegistry() {
+    return this.registry
+  }
+
+  /** 注册手机端 SSE 推送中心（由 index.ts 注入） */
+  setMobileHub(hub: { broadcast: (name: string, body: any) => void }) {
+    this.mobileHub = hub
   }
 
   // URL 解码（含 HTML 实体转义），解码失败原样返回

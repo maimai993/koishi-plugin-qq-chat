@@ -118,6 +118,14 @@
 
 `/qq-chat/window?bot=<机器人>&channel=<频道>` 只渲染单个频道，可以单独开窗、拖到副屏，或直接 iframe 嵌到别的网页里。
 
+### 手机端 App（PWA）
+
+| 登录页 | 频道列表 | 手机端聊天 |
+| --- | --- | --- |
+| ![手机端登录](https://github.com/maimai993/koishi-plugin-qq-chat/raw/main/screenshots/25-mobile-app-login.jpg) | ![手机端频道列表](https://github.com/maimai993/koishi-plugin-qq-chat/raw/main/screenshots/26-mobile-channel-list.jpg) | ![手机端 App](https://github.com/maimai993/koishi-plugin-qq-chat/raw/main/screenshots/26-mobile-app.jpg) |
+
+手机浏览器打开 `http://<你的服务器>:5140/qq-chat/m`，输入访问密码就能用；Safari / Chrome 里「**添加到主屏幕**」后会像原生 App 一样全屏运行（PWA：manifest + Service Worker + 图标）。界面和独立窗口完全一致（左滑引用 / 右滑返回 / 未读持久化 / 频道预览全都在），只是数据层换成了 HTTP + SSE，所以手机不依赖控制台登录态。
+
 ### 指令桥接（执行指令）
 
 ![指令桥接](https://github.com/maimai993/koishi-plugin-qq-chat/raw/main/screenshots/18-command-bridge.jpg)
@@ -163,6 +171,45 @@
 - 沙盒回复支持「发送到当前频道 / 编辑发送（按原始元素）/ 以 MD 发送（QQ 原生 markdown）」，图片 / 语音 / 视频不会被压成文本
 - 沙盒发送键的下拉里可以「以 Markdown 格式发送到当前频道」，插件产出的原生 markdown（自带按钮 / 链接）不会丢格式
 - 沙盒产生的消息**不会**写进真实聊天记录，也不会真的发到 QQ
+
+### 📱 手机端 App 与开放 API
+
+- **手机端 App（PWA）**：`/qq-chat/m`，支持「添加到主屏幕」，全屏运行、断线自愈（Service Worker 缓存外壳，接口永不缓存）
+- **访问密码**：配置 `mobilePassword` 后，手机端页面与所有 `/qq-chat/api/*` 都要求先用密码换令牌（令牌写在 `data/qq-chat/v2/mobile-tokens.json`，可随时失效）
+- **手机 API**（REST + SSE），可以直接给第三方客户端 / 自研 App 用：
+
+  | 接口 | 说明 |
+  | --- | --- |
+  | `POST /qq-chat/api/login` | `{ password, name }` → `{ token }`（同时下发 cookie，聊天媒体才能显示） |
+  | `GET  /qq-chat/api/info` | 插件版本、是否需要密码、当前是否已登录 |
+  | `GET  /qq-chat/api/me` | 机器人 / 频道列表 + 每个频道最后一条消息预览 + 未读状态 + 消息条数 |
+  | `GET  /qq-chat/api/channels` | 只要频道列表与预览 |
+  | `GET  /qq-chat/api/messages?selfId=&channelId=&limit=&offset=` | 拉历史消息（从新到旧分页） |
+  | `POST /qq-chat/api/send` | `{ selfId, channelId, content, images?, files? }` 发消息（真的发到 QQ） |
+  | `POST /qq-chat/api/read` | `{ selfId, channelId }` 标记已读 |
+  | `POST /qq-chat/api/rpc` | `{ name, args }` 通用桥：调用控制台里注册的任意接口（群管理、表情、Markdown、指令桥接…功能与网页端完全对齐） |
+  | `GET  /qq-chat/api/events` | SSE 实时推送：新消息、发送成功 / 失败、未读变化、群状态变化 |
+
+- **鉴权**：`Authorization: Bearer <token>`（手机 App / 第三方客户端）或控制台登录 cookie（同一个浏览器登录过控制台即可直接用）
+- **跨域**：`/qq-chat/api/*` 带 CORS 头，原生 App / 网页应用可以直接调
+
+```bash
+# 换令牌
+curl -X POST http://127.0.0.1:5140/qq-chat/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"password":"你的访问密码","name":"我的手机"}'
+
+# 拉频道列表
+curl http://127.0.0.1:5140/qq-chat/api/me -H "Authorization: Bearer <token>"
+
+# 发消息
+curl -X POST http://127.0.0.1:5140/qq-chat/api/send \
+  -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+  -d '{"selfId":"<机器人>","channelId":"<频道>","content":"来自 API 的问候"}'
+
+# 实时推送（新消息 / 发送状态）
+curl -N "http://127.0.0.1:5140/qq-chat/api/events?token=<token>"
+```
 
 ### 🛠️ 群管理
 
@@ -228,6 +275,7 @@
 | `commandMaxLength` | `number` | `1200` | 指令输出发送到 QQ 的最大长度 |
 | `commandEditRules` | `string` | `''` | 输出编辑规则：每行一条「查找=>替换」，按顺序应用，用 \n 表示换行 |
 | `loginRequired` | `boolean` | `true` | 启用 auth 插件时，独立窗口 / 沙盒窗口与聊天媒体是否要求先登录控制台（关闭后这些地址重新变为公开，仅建议内网调试时关闭） |
+| `mobilePassword` | `string` | `''` | 手机端 App / 手机 API 的访问密码。填写后 `/qq-chat/m` 与 `/qq-chat/api/*` 都要求先输密码换令牌；留空则跟随「访问控制」（启用 auth 时用控制台登录态，否则公开） |
 | `clearIndexedDBOnStart` | `boolean` | `true` | 启动时强制清空 IndexedDB 图片缓存（浏览器卡死时的急救开关） |
 | `loggerinfo` | `boolean` | `false` | 日志调试模式（开发者选项） |
 
@@ -238,6 +286,7 @@
 | `data/qq-chat/v2/metadata.json` | 机器人、频道、置顶等元数据 |
 | `data/qq-chat/v2/chat-history/<机器人>/<频道>/` | 聊天记录（分块 `chunk-*.json` + `index.json`） |
 | `data/qq-chat/v2/read-state.json` | 未读状态（每个频道的已读水位 + 未读数） |
+| `data/qq-chat/v2/mobile-tokens.json` | 手机端 / API 的访问令牌（最多保留 20 个） |
 | `data/qq-chat/temp/` | 待发送的图片 / 文件临时目录 |
 | `data/qq-chat/persist-media/` | 图片 / 语音 / 视频 / 头像缓存 |
 
@@ -278,10 +327,27 @@ QQ 语音是 silk 格式，浏览器播不了。启用 `koishi-plugin-silk` 并�
 **Q：开了 auth 插件后，独立窗口 / 沙盒窗口提示「需要登录 Koishi 控制台」？**
 这是预期行为：未登录的浏览器不允许访问窗口与聊天媒体。先在控制台登录一次，插件会把令牌镜像到本域 cookie，之后重新打开窗口即可。确实要让这些地址公开时，把插件配置里的 **访问控制 → loginRequired** 关掉。
 
+**Q：手机 App 怎么用？**
+在 `/qq-chat/m` 打开页面（或用手机浏览器扫描同一个地址），输入插件配置里的 **访问密码** 即可；iOS Safari / Android Chrome 里选择「添加到主屏幕」就会像原生 App 一样全屏运行。想给自研 App 用，直接调 `/qq-chat/api/*`（见上面的手机 API 表）。
+
 **Q：消息明明发失败了，为什么没标出来？**
 3.2.0 起不会再有这种情况：适配器报错、QQ 接口报错、返回空数组、没返回消息 ID 都会标「发送失败」。如果还有漏网的，欢迎带日志反馈。
 
 ## 📝 更新日志
+
+### 3.3.0
+
+**新增**
+
+- ✨ **手机端 App（PWA）**：`/qq-chat/m`，手机浏览器打开即可用，支持「添加到主屏幕」全屏运行；界面与独立窗口完全一致（滑动引用 / 右滑返回 / 未读持久化 / 频道预览 / 群管理全都在），数据层换成 HTTP + SSE
+- ✨ **手机 API（REST + SSE）**：`/qq-chat/api/*`，提供登录、频道 / 消息读取、发消息、标记已读、通用 RPC 桥与实时推送，方便自研 App / 第三方客户端接入；带 CORS，鉴权支持 `Authorization: Bearer` 或控制台登录 cookie
+- ✨ **访问密码**：新增配置项 `mobilePassword`，手机端页面与 API 都要求先用密码换令牌（令牌持久化在 `data/qq-chat/v2/mobile-tokens.json`，可单独失效）
+- ✨ 手机端媒体（图片 / 语音 / 视频）随登录自动放行：登录时下发 cookie，`<img>/<video>` 这类普通请求也能带鉴权
+
+**说明**
+
+- 手机端与网页端共用同一套后端接口：手机 App 的功能调用会转发到控制台注册的同一个监听器（`/qq-chat/api/rpc`），因此不会出现「网页端能用、手机端没有」的功能
+- 不填 `mobilePassword` 时行为与以前一致：启用 auth 插件就要求控制台登录，没启用则公开
 
 ### 3.2.0
 

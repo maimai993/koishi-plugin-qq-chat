@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { MessageHandler } from './message-handler'
 import { FileManager } from './file-manager'
 import { ApiHandlers } from './api-handlers'
+import { MobileApi } from './mobile-api'
 import { ReadStateStore } from './read-state'
 import { Config } from './config'
 import { createPluginLogger } from './logger'
@@ -165,8 +166,8 @@ export async function apply(ctx: Context, config: Config) {
       return !!(ctx as any).get?.('auth')
     }
 
-    const isConsoleAuthed = async (routerCtx: any): Promise<boolean> => {
-      if (!authRequired()) return true
+    // 控制台登录 cookie 校验（client/auth.ts 会把控制台令牌镜像到 cookie）
+    const isConsoleCookieAuthed = async (routerCtx: any): Promise<boolean> => {
       const raw = parseCookies(routerCtx.headers?.cookie)[authCookieName]
       if (!raw) return false
       const idx = raw.indexOf(':')
@@ -182,6 +183,23 @@ export async function apply(ctx: Context, config: Config) {
       } catch {
         return false
       }
+    }
+
+    // 手机端 API：令牌登录 + REST + SSE（见 src/mobile-api.ts）
+    const mobileApi = new MobileApi(ctx.baseDir, pluginLogger, {
+      getRegistry: () => apiHandlers.getRegistry(),
+      isConsoleAuthed: async (routerCtx: any) => isConsoleAuthed(routerCtx),
+      hasConsoleSession: async (routerCtx: any) => isConsoleCookieAuthed(routerCtx)
+    }, String(config.mobilePassword || ''))
+    apiHandlers.setMobileHub(mobileApi)
+    messageHandler.setMobileHub(mobileApi)
+
+    // 是否需要登录：控制台 cookie 或手机端令牌（手机浏览器登录 App 后，
+    // 聊天媒体走普通 <img>/<video> 请求带不了自定义头，所以登录时会同时下发 cookie）
+    const isConsoleAuthed = async (routerCtx: any): Promise<boolean> => {
+      if (!authRequired()) return true
+      if (await isConsoleCookieAuthed(routerCtx)) return true
+      return await mobileApi.isRequestAuthed(routerCtx)
     }
 
     const unauthorizedHtml = [
@@ -206,6 +224,24 @@ export async function apply(ctx: Context, config: Config) {
       || p.startsWith('/vite/@fs/')
       || p.startsWith('/qq-chat/media/persist-media/')
       || p.startsWith('/qq-chat/media/persist-images/')
+    // 手机端 API：注册成 ctx.server 的路由（而不是 use 中间件）。
+    // 控制台插件注册了 GET 通配路由并启用了 allowedMethods，use 中间件里的 POST 会直接 405。
+    const mobileApiRoute = async (routerCtx: any) => {
+      const result = await mobileApi.handle(routerCtx)
+      if (result === 'stream') return
+      if (!result) {
+        routerCtx.status = 404
+        routerCtx.type = 'application/json; charset=utf-8'
+        routerCtx.body = JSON.stringify({ ok: false, error: '未知接口' })
+      }
+    }
+    const server: any = ctx.server as any
+    if (typeof server.get === 'function') {
+      server.get('/qq-chat/api/:route', mobileApiRoute)
+      server.post('/qq-chat/api/:route', mobileApiRoute)
+      if (typeof server.options === 'function') server.options('/qq-chat/api/:route', mobileApiRoute)
+    }
+
     // 统一中间件：1) 插件入口文件禁用缓存  2) 提供本地媒体文件服务  3) 提供 QQ 表情静态资源。
     // 用 use() + 手动解析路径，兼容 koa-router 各版本（不依赖 (.*) 参数捕获）。
     ctx.server.use(async (routerCtx: any, next: any) => {
@@ -214,6 +250,9 @@ export async function apply(ctx: Context, config: Config) {
         routerCtx.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
         routerCtx.set('Pragma', 'no-cache')
       }
+
+      // 手机端 API（REST + SSE）在下面以路由形式注册：
+      // 控制台注册了 GET 通配路由 + allowedMethods，普通 use 中间件里的 POST 会被 405 掉
 
       // 启用 auth 插件时：窗口 / 私有媒体等必须先登录（详见上面的访问控制说明）
       if (needsAuth(p) && !(await isConsoleAuthed(routerCtx))) {
@@ -285,7 +324,9 @@ export async function apply(ctx: Context, config: Config) {
       // （都只渲染单个频道的聊天界面，可单独开窗口；沙盒窗口发的消息只在本机执行，点「发送到当前频道」才真的发到 QQ）
       const staticWindows = [
         { prefix: '/qq-chat/window', html: 'standalone.html' },
-        { prefix: '/qq-chat/sandbox', html: 'sandbox.html' }
+        { prefix: '/qq-chat/sandbox', html: 'sandbox.html' },
+        // 手机端 App（PWA）：可直接「添加到主屏幕」，走 /qq-chat/api 收发消息
+        { prefix: '/qq-chat/m', html: 'mobile.html' }
       ]
       const matchedWindow = staticWindows.find((item) =>
         p === item.prefix || p === `${item.prefix}/` || p.startsWith(`${item.prefix}/`))
@@ -318,7 +359,10 @@ export async function apply(ctx: Context, config: Config) {
             }
             routerCtx.type = 'html'
             routerCtx.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
-            routerCtx.body = html.replace('{/*KOISHI_CONFIG*/}', JSON.stringify(globalConfig))
+            const injected = matchedWindow.html === 'mobile.html'
+              ? { ...globalConfig, qqChatMobile: true }
+              : globalConfig
+            routerCtx.body = html.replace('{/*KOISHI_CONFIG*/}', JSON.stringify(injected))
             return
           }
           const filePath = path.normalize(path.join(distDir, rel))
@@ -331,7 +375,11 @@ export async function apply(ctx: Context, config: Config) {
             routerCtx.status = 404
             return
           }
-          routerCtx.type = path.extname(filePath)
+          const ext = path.extname(filePath).toLowerCase()
+          // 手机端 PWA：manifest / service worker 要用正确的 MIME，否则装不上
+          if (ext === '.webmanifest') routerCtx.type = 'application/manifest+json'
+          else if (ext === '.js' && path.basename(filePath) === 'sw.js') routerCtx.type = 'text/javascript'
+          else routerCtx.type = ext
           routerCtx.body = createReadStream(filePath)
         } catch {
           routerCtx.status = 404

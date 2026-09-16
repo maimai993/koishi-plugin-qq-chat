@@ -1,0 +1,108 @@
+/* 手机端 App（PWA）专属样式：登录页 + 安全区适配 */
+.qq-mobile-login {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--chat-bg, #f5f6f7);
+  color: var(--chat-text, #1f1f1f);
+}
+
+.qq-mobile-login-card {
+  width: 100%;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 28px 22px 24px;
+  border-radius: 18px;
+  background: var(--chat-card-bg, #fff);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  animation: chat-fade-up 0.28s var(--chat-ease, ease) both;
+}
+
+.qq-mobile-login-logo {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #12b7f5, #0099ff);
+  color: #fff;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 6px 18px rgba(0, 153, 255, 0.35);
+}
+
+.qq-mobile-login-card h1 {
+  margin: 0;
+  font-size: 18px;
+  text-align: center;
+}
+
+.qq-mobile-login-tip {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-align: center;
+  opacity: 0.6;
+}
+
+.qq-mobile-login-input {
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--k-border-color, rgba(0, 0, 0, 0.12));
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.qq-mobile-login-input:focus {
+  border-color: var(--k-color-primary, #0099ff);
+  box-shadow: 0 0 0 3px rgba(0, 153, 255, 0.16);
+}
+
+.qq-mobile-login-error {
+  font-size: 12.5px;
+  color: #fa5151;
+  text-align: center;
+}
+
+.qq-mobile-login-btn {
+  height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: var(--k-color-primary, #0099ff);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.14s ease, opacity 0.14s ease;
+}
+
+.qq-mobile-login-btn:active {
+  transform: scale(0.97);
+}
+
+.qq-mobile-login-btn:disabled {
+  opacity: 0.6;
+}
+
+/* 手机端：底部留出 Home Indicator 的安全区 */
+.qq-chat-wrapper .chat-input-area {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+html.standalone-app .qq-chat-wrapper .chat-header {
+  padding-top: env(safe-area-inset-top, 0px);
+  height: calc(3.5rem + env(safe-area-inset-top, 0px));
+}

@@ -1,10 +1,10 @@
 {
   "name": "koishi-plugin-qq-chat",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "contributors": [
     "maimai <2237886846@qq.com>"
   ],
-  "description": "夺舍 QQ 官方机器人：在 Koishi 控制台直接接管官方 QQ 机器人的群聊，内置沙盒窗口、指令桥接、媒体收发、未读持久化与群管理（支持 auth 插件登录保护）",
+  "description": "夺舍 QQ 官方机器人：在 Koishi 控制台直接接管官方 QQ 机器人的群聊，内置沙盒窗口、指令桥接、媒体收发、未读持久化、手机 App(PWA) 与开放 API、群管理（支持 auth 插件登录保护）",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -41,6 +41,8 @@
     "console",
     "unread",
     "mobile",
+    "pwa",
+    "rest-api",
     "koishi-plugin"
   ],
   "peerDependencies": {
@@ -59,7 +61,7 @@
   },
   "koishi": {
     "description": {
-      "zh": "在 Koishi 控制台接管官方 QQ 机器人的群聊：聊天记录、图片 / 语音 / 视频 / 文件收发、群管理、独立窗口与沙盒模式一应俱全；频道列表自带最后一条消息预览，未读消息持久化保存、打开群聊自动停在未读区域，手机端支持左滑引用 / 右滑返回的真机手势。启用 auth 插件后窗口与聊天媒体会自动要求登录。Markdown 面板的图片上传依赖 assets 服务（推荐 koishi-plugin-assets-qqbot-part-file）。"
+      "zh": "在 Koishi 控制台接管官方 QQ 机器人的群聊：聊天记录、图片 / 语音 / 视频 / 文件收发、群管理、独立窗口与沙盒模式一应俱全；频道列表自带最后一条消息预览，未读消息持久化保存、打开群聊自动停在未读区域，手机端支持左滑引用 / 右滑返回的真机手势。自带手机 App（PWA，可添加到主屏幕）与开放 API（REST + SSE），手机也能收发消息。启用 auth 插件后窗口与聊天媒体会自动要求登录。Markdown 面板的图片上传依赖 assets 服务（推荐 koishi-plugin-assets-qqbot-part-file）。"
     },
     "service": {
       "optional": [

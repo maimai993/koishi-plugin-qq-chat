@@ -17,11 +17,25 @@ import fs from 'node:fs'
 const root = fileURLToPath(new URL('.', import.meta.url))
 // node_modules/@koishijs/client/client/data.ts（exports 里没开放子路径，这里直接按目录取）
 const dataEntry = resolve(root, '..', '@koishijs', 'client', 'client', 'data.ts')
+// 手机端的 HTTP + SSE 数据层（替代 websocket 版）
+const mobileData = resolve(root, 'client', 'mobile-data.ts')
 
 // 每个窗口一份构建：base 决定 HTML 里引用资源的相对地址，服务端按同样的前缀挂载
+//  - window / sandbox：走 websocket（@koishijs/client 的 data.ts）
+//  - m（手机端 App / PWA）：走 HTTP + SSE（mobile-data.ts）
 const windows = [
-  { html: 'client/standalone.html', base: '/qq-chat/window/', js: 'window.js', asset: 'window.[ext]' },
-  { html: 'client/sandbox.html', base: '/qq-chat/sandbox/', js: 'sandbox.js', asset: 'sandbox.[ext]' },
+  { html: 'client/standalone.html', base: '/qq-chat/window/', js: 'window.js', asset: 'window.[ext]', data: dataEntry },
+  { html: 'client/sandbox.html', base: '/qq-chat/sandbox/', js: 'sandbox.js', asset: 'sandbox.[ext]', data: dataEntry },
+  { html: 'client/mobile.html', base: '/qq-chat/m/', js: 'mobile.js', asset: 'mobile.[ext]', data: mobileData },
+]
+
+// 手机端 PWA 需要的静态文件：manifest / service worker / 图标（服务端从 dist 直接读）
+const mobileAssets = [
+  ['manifest.webmanifest', 'manifest.webmanifest'],
+  ['sw.js', 'sw.js'],
+  ['icon.svg', 'icon.svg'],
+  ['icon-192.png', 'icon-192.png'],
+  ['icon-512.png', 'icon-512.png'],
 ]
 
 for (const win of windows) {
@@ -46,7 +60,7 @@ for (const win of windows) {
     plugins: [vue()],
     resolve: {
       alias: {
-        '@koishijs/client': dataEntry,
+        '@koishijs/client': win.data || dataEntry,
       },
     },
     css: {
@@ -61,5 +75,13 @@ for (const win of windows) {
   if (fs.existsSync(emitted)) fs.renameSync(emitted, target)
   console.log(`[qq-chat] 窗口构建完成：dist/${basename(win.html)}`)
 }
+
+// 手机端 PWA 静态文件：拷进 dist（服务端按 /qq-chat/m/<文件名> 提供）
+for (const [from, to] of mobileAssets) {
+  const src = resolve(root, 'client', 'assets', from)
+  const dest = resolve(root, 'dist', to)
+  if (fs.existsSync(src)) fs.copyFileSync(src, dest)
+}
+console.log('[qq-chat] 手机端 PWA 资源已生成：dist/manifest.webmanifest、sw.js、icon-*.png')
 
 fs.rmSync(resolve(root, 'dist', 'client'), { recursive: true, force: true })

@@ -40,6 +40,11 @@ export declare class MessageHandler {
      */
     private wrapOutgoingSender;
     wrapBotSenders(): void;
+    /** 手机端 SSE 推送中心（由 index.ts 注入）：网页端与手机端收到同一份广播 */
+    private mobileHub?;
+    setMobileHub(hub: {
+        broadcast: (name: string, body: any) => void;
+    }): void;
     /** 广播带 authority：启用 auth 插件后未登录的客户端收不到聊天内容 */
     private broadcast;
     private isAtBotMessage;
