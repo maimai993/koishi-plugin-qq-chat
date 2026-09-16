@@ -8,6 +8,7 @@ import * as mime from 'mime-types'
 import { FileManager } from './file-manager'
 import { MessageHandler } from './message-handler'
 import { ReadStateStore } from './read-state'
+import { NotifyRuleStore } from './notify-rules'
 import { Config, CONSOLE_AUTHORITY } from './config'
 import { PluginLogger } from './logger'
 import {
@@ -60,6 +61,13 @@ export class ApiHandlers {
   private registry: Record<string, (data: any) => any> = {}
 
   private mobileHub?: { broadcast: (name: string, body: any) => void }
+
+  private notifyRules?: NotifyRuleStore
+
+  /** 注入推送设置存储（免打扰列表），供控制台与手机端互通 */
+  setNotifyRules(store: NotifyRuleStore) {
+    this.notifyRules = store
+  }
 
   getRegistry() {
     return this.registry
@@ -430,6 +438,26 @@ export class ApiHandlers {
       catch (error) {
         this.logger.error('获取频道预览失败:', error);
         return { success: false, error: this.getClientErrorMessage(error), previews: {} };
+      }
+    });
+    // 推送设置：免打扰频道列表（控制台设置后写进服务端，手机 App 的通知据此静音）
+    this.addListener('get-notify-muted', async () => {
+      try {
+        const rules = await this.notifyRules?.get()
+        return { success: true, muted: rules?.muted || [] }
+      }
+      catch (error) {
+        return { success: false, muted: [], error: this.getClientErrorMessage(error) }
+      }
+    });
+    this.addListener('set-notify-muted', async (data) => {
+      try {
+        const muted = Array.isArray(data?.muted) ? data.muted.map((x: any) => String(x)) : []
+        const rules = await this.notifyRules?.setMuted(muted)
+        return { success: true, muted: rules?.muted || [] }
+      }
+      catch (error) {
+        return { success: false, error: this.getClientErrorMessage(error) }
       }
     });
     // 未读状态（持久化在 data/qq-chat/v2/read-state.json）

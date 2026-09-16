@@ -2,6 +2,7 @@ import { Context } from 'koishi';
 import { FileManager } from './file-manager';
 import { MessageHandler } from './message-handler';
 import { ReadStateStore } from './read-state';
+import { NotifyRuleStore } from './notify-rules';
 import { Config } from './config';
 import { PluginLogger } from './logger';
 export declare class ApiHandlers {
@@ -28,6 +29,9 @@ export declare class ApiHandlers {
     /** 手机端 API 用来复用这些监听器 */
     private registry;
     private mobileHub?;
+    private notifyRules?;
+    /** 注入推送设置存储（免打扰列表），供控制台与手机端互通 */
+    setNotifyRules(store: NotifyRuleStore): void;
     getRegistry(): Record<string, (data: any) => any>;
     /** 注册手机端 SSE 推送中心（由 index.ts 注入） */
     setMobileHub(hub: {

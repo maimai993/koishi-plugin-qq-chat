@@ -9,6 +9,7 @@ import { MessageHandler } from './message-handler'
 import { FileManager } from './file-manager'
 import { ApiHandlers } from './api-handlers'
 import { MobileApi } from './mobile-api'
+import { NotifyRuleStore } from './notify-rules'
 import { ReadStateStore } from './read-state'
 import { Config } from './config'
 import { createPluginLogger } from './logger'
@@ -47,6 +48,8 @@ export async function apply(ctx: Context, config: Config) {
 
   // 未读状态持久化（刷新/重启后未读数与「未读区域」的起点都还在）
   const readState = new ReadStateStore(ctx.baseDir, pluginLogger)
+  // 推送设置（免打扰列表）：手机 App 的通知要遵守它
+  const notifyRules = new NotifyRuleStore(ctx.baseDir, pluginLogger)
 
   const messageHandler = new MessageHandler(ctx, config, fileManager, pluginLogger, readState)
   const apiHandlers = new ApiHandlers(ctx, config, fileManager, messageHandler, pluginLogger, readState)
@@ -190,8 +193,9 @@ export async function apply(ctx: Context, config: Config) {
       getRegistry: () => apiHandlers.getRegistry(),
       isConsoleAuthed: async (routerCtx: any) => isConsoleAuthed(routerCtx),
       hasConsoleSession: async (routerCtx: any) => isConsoleCookieAuthed(routerCtx)
-    }, String(config.mobilePassword || ''))
+    }, String(config.mobilePassword || ''), notifyRules)
     apiHandlers.setMobileHub(mobileApi)
+    apiHandlers.setNotifyRules(notifyRules)
     messageHandler.setMobileHub(mobileApi)
 
     // 是否需要登录：控制台 cookie 或手机端令牌（手机浏览器登录 App 后，
@@ -481,6 +485,7 @@ export async function apply(ctx: Context, config: Config) {
     messageHandler.dispose()
     void fileManager.dispose()
     void readState.dispose()
+    void notifyRules.dispose()
     pluginLogger.logInfo('插件已卸载，所有待处理的消息已写入')
   })
 }

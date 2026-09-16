@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-qq-chat",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "contributors": [
     "maimai <2237886846@qq.com>"
   ],
@@ -13,6 +13,7 @@
     "client",
     "dist",
     "screenshots",
+    "android/QQChat-1.0.0.apk",
     "readme.md"
   ],
   "scripts": {

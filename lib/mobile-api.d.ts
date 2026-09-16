@@ -1,4 +1,5 @@
 import { PluginLogger } from './logger';
+import { NotifyRuleStore } from './notify-rules';
 /**
  * 手机端 API（REST + SSE）。
  *
@@ -36,13 +37,14 @@ export declare class MobileApi {
     private logger;
     private deps;
     private mobilePassword;
+    private notifyRules?;
     private tokens;
     private tokensFile;
     /** SSE 客户端：直接持有响应对象，广播时往里写 */
     private clients;
     /** 登录失败次数（防爆破，按 IP 记） */
     private failures;
-    constructor(baseDir: string, logger: PluginLogger, deps: MobileApiDeps, mobilePassword?: string);
+    constructor(baseDir: string, logger: PluginLogger, deps: MobileApiDeps, mobilePassword?: string, notifyRules?: NotifyRuleStore);
     private loadTokens;
     private saveTokens;
     issueToken(name: string, days?: number): Promise<MobileToken>;

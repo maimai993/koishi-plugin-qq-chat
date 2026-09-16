@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QQ 机器人</string>
+    <string name="settings_title">连接设置</string>
+    <string name="hint_server">服务器地址，例如 http://192.168.1.10:5140</string>
+    <string name="hint_password">访问密码（插件配置里的 mobilePassword）</string>
+    <string name="btn_connect">保存并连接</string>
+    <string name="btn_test">测试连接</string>
+    <string name="btn_settings">设置</string>
+    <string name="switch_notify">新消息通知（免打扰频道仅在 @ 或被引用时提醒）</string>
+    <string name="notify_channel_name">新消息</string>
+    <string name="notify_service_title">QQ 机器人</string>
+    <string name="notify_service_text">正在同步消息，收到新消息会通知你</string>
+</resources>

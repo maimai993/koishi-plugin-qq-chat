@@ -126,6 +126,12 @@
 
 手机浏览器打开 `http://<你的服务器>:5140/qq-chat/m`，输入访问密码就能用；Safari / Chrome 里「**添加到主屏幕**」后会像原生 App 一样全屏运行（PWA：manifest + Service Worker + 图标）。界面和独立窗口完全一致（左滑引用 / 右滑返回 / 未读持久化 / 频道预览全都在），只是数据层换成了 HTTP + SSE，所以手机不依赖控制台登录态。
 
+### Android App（APK）
+
+原生 Android 客户端（`android/QQChat-1.0.0.apk`，50 KB）：**连接设置**里填服务器地址（+ 访问密码），保存后直接进入聊天界面，和手机端网页完全一样；退回后台时由**前台服务保持 SSE 长连接**，新消息走**系统通知**，点通知直接跳到对应群。
+
+> 通知规则：**免打扰的群不推送，除非有人 @ 机器人或被引用了机器人的消息**（免打扰列表跟着控制台的「消息免打扰」走，也可以在手机端改）。不需要 Google 服务 / FCM，纯自建长连接。
+
 ### 指令桥接（执行指令）
 
 ![指令桥接](https://github.com/maimai993/koishi-plugin-qq-chat/raw/main/screenshots/18-command-bridge.jpg)
@@ -172,6 +178,26 @@
 - 沙盒发送键的下拉里可以「以 Markdown 格式发送到当前频道」，插件产出的原生 markdown（自带按钮 / 链接）不会丢格式
 - 沙盒产生的消息**不会**写进真实聊天记录，也不会真的发到 QQ
 
+### 📲 Android App（原生 APK）
+
+- **真·系统通知**：前台服务 + SSE 长连接，收到新消息用系统通知弹出，点一下直接跳到那个群
+- **连接设置界面**：服务器地址、访问密码、通知开关、「测试连接」按钮，全部存在本机
+- **免打扰规则**：免打扰频道不推送，除非**有人 @ 机器人**或**引用了机器人的消息**
+- **不需要 FCM / Google 服务**：自己维持长连接（前台服务会显示一条常驻通知，属于正常现象）
+- 支持明文 `http://`（局域网自建服务器），支持深链 `?bot=&channel=`
+- 自带 WebView 外壳，界面跟网页端同源，服务端更新界面无需重装 App
+
+**安装**：从仓库下载 `android/QQChat-1.0.0.apk`（或自己编译：`python android/build.py`，需要 JDK 17+ 与 Android SDK 的 build-tools + platform-34），手机上允许「安装未知来源应用」后安装即可。
+
+**自己编译**：
+
+```bash
+# 需要 JDK 17+ 和 Android SDK（build-tools + platforms/android-34）
+cd android
+python build.py          # 产物：build/QQChat-1.0.0.apk（首次会自动生成签名用的 keystore）
+python run-tests.py      # 通知规则单测（免打扰 / @ / 引用），不需要手机
+```
+
 ### 📱 手机端 App 与开放 API
 
 - **手机端 App（PWA）**：`/qq-chat/m`，支持「添加到主屏幕」，全屏运行、断线自愈（Service Worker 缓存外壳，接口永不缓存）
@@ -188,6 +214,8 @@
   | `POST /qq-chat/api/send` | `{ selfId, channelId, content, images?, files? }` 发消息（真的发到 QQ） |
   | `POST /qq-chat/api/read` | `{ selfId, channelId }` 标记已读 |
   | `POST /qq-chat/api/rpc` | `{ name, args }` 通用桥：调用控制台里注册的任意接口（群管理、表情、Markdown、指令桥接…功能与网页端完全对齐） |
+  | `GET  /qq-chat/api/notify-rules` | 读推送规则（免打扰频道列表） |
+  | `POST /qq-chat/api/notify-rules` | `{ muted: [...] }` 写免打扰列表（手机端与控制台共用一份） |
   | `GET  /qq-chat/api/events` | SSE 实时推送：新消息、发送成功 / 失败、未读变化、群状态变化 |
 
 - **鉴权**：`Authorization: Bearer <token>`（手机 App / 第三方客户端）或控制台登录 cookie（同一个浏览器登录过控制台即可直接用）
@@ -334,6 +362,16 @@ QQ 语音是 silk 格式，浏览器播不了。启用 `koishi-plugin-silk` 并�
 3.2.0 起不会再有这种情况：适配器报错、QQ 接口报错、返回空数组、没返回消息 ID 都会标「发送失败」。如果还有漏网的，欢迎带日志反馈。
 
 ## 📝 更新日志
+
+### 3.4.0
+
+**新增**
+
+- 📲 **原生 Android App（APK，`android/QQChat-1.0.0.apk`）**：带**连接设置界面**（服务器地址 / 访问密码 / 通知开关 / 测试连接），用 WebView 承载手机端界面，前台服务维持 SSE 长连接，新消息走**系统通知**，点通知直接跳到对应群；不需要 FCM / Google 服务
+- 🔔 **推送规则（免打扰）**：免打扰的频道**不推送**，除非**有人 @ 机器人**或**引用了机器人的消息**；免打扰列表由控制台的「消息免打扰」同步到服务端（`data/qq-chat/v2/notify-settings.json`），手机端与控制台共用一份
+- ✨ 新增 API：`GET/POST /qq-chat/api/notify-rules` 读写推送规则；`/qq-chat/api/me` 里也带上了 `muted`
+- ✨ 新增控制台接口 `get-notify-muted` / `set-notify-muted`：网页端切换「消息免打扰」时会同步给服务端，手机端也能改
+- 🧪 Android 端附带**通知规则单测**（`android/run-tests.py`，纯 JDK 运行，覆盖免打扰 / @我 / 被引用 / 标题 / 内容清洗），以及不依赖 Gradle 的 APK 编译脚本（`android/build.py`）
 
 ### 3.3.0
 

@@ -512,6 +512,25 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
     try {
       localStorage.setItem(MUTED_CHANNELS_KEY, JSON.stringify(mutedChannels.value))
     } catch { /* 忽略写入失败 */ }
+    // 同步给服务端：手机 App 的通知要遵守这里设的「消息免打扰」
+    // （免打扰频道不推送，除非有人 @ 机器人或被引用了消息）
+    void (send as any)('set-notify-muted', { muted: mutedChannels.value }).catch(() => undefined)
+  }
+
+  /** 启动时把服务端的免打扰列表并进来（手机端也可能加过），两边保持一致 */
+  const syncNotifyMuted = async () => {
+    try {
+      const result: any = await (send as any)('get-notify-muted')
+      const remote: string[] = Array.isArray(result?.muted) ? result.muted.map((x: any) => String(x)) : []
+      const merged = [...new Set([...mutedChannels.value, ...remote])]
+      if (merged.length !== mutedChannels.value.length) {
+        mutedChannels.value = merged
+        try {
+          localStorage.setItem(MUTED_CHANNELS_KEY, JSON.stringify(merged))
+        } catch { /* 忽略 */ }
+      }
+      if (merged.length !== remote.length) void (send as any)('set-notify-muted', { muted: merged })
+    } catch { /* 忽略：拉不到就沿用本地 */ }
   }
   const isChannelMuted = (key: string) => mutedChannels.value.includes(key)
   const setChannelMuted = (key: string, muted: boolean) => {
@@ -3105,6 +3124,8 @@ const unreadTotal = computed(() => {
     // 未读状态（持久化在后端）+ 频道列表预览（每个频道最后一条消息）
     void loadReadState()
     void loadChannelPreviews()
+    // 免打扰列表与服务端同步（手机端推送据此静音）
+    void syncNotifyMuted()
     const previewTimer = setInterval(() => {
       void loadChannelPreviews(undefined, true)
     }, 90000)

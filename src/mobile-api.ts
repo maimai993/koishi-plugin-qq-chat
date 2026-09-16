@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 
 import { PluginLogger } from './logger'
+import { NotifyRuleStore } from './notify-rules'
 
 /**
  * 手机端 API（REST + SSE）。
@@ -55,7 +56,8 @@ export class MobileApi {
     private baseDir: string,
     private logger: PluginLogger,
     private deps: MobileApiDeps,
-    private mobilePassword: string = ''
+    private mobilePassword: string = '',
+    private notifyRules?: NotifyRuleStore
   ) {
     this.tokensFile = path.join(baseDir, 'data', 'qq-chat', 'v2', 'mobile-tokens.json')
   }
@@ -351,6 +353,7 @@ export class MobileApi {
         }
         const previews = await this.callListener('get-channel-previews', [{ channels }]).catch(() => ({ previews: {} }))
         const read = await this.callListener('get-read-state', []).catch(() => ({ state: {} }))
+        const rules = await this.notifyRules?.get().catch(() => undefined)
         this.json(routerCtx, 200, {
           ok: true,
           bots: data?.data?.bots || {},
@@ -358,6 +361,8 @@ export class MobileApi {
           counts: counts?.counts || {},
           previews: previews?.previews || {},
           readState: read?.state || {},
+          // 免打扰的频道：手机端推送要遵守（免打扰里只有 @机器人 / 被引用才推）
+          muted: rules?.muted || [],
           pinnedBots: data?.data?.pinnedBots || [],
           pinnedChannels: data?.data?.pinnedChannels || []
         })
@@ -433,6 +438,25 @@ export class MobileApi {
           this.json(routerCtx, 200, { ok: false, error: String(error?.message || error) })
         }
         return true
+      }
+
+      if (route === 'notify-rules') {
+        if (!this.notifyRules) {
+          this.json(routerCtx, 200, { ok: true, muted: [] })
+          return true
+        }
+        if (routerCtx.method === 'GET') {
+          const rules = await this.notifyRules.get()
+          this.json(routerCtx, 200, { ok: true, muted: rules.muted, updatedAt: rules.updatedAt })
+          return true
+        }
+        if (routerCtx.method === 'POST') {
+          const body = await this.readBody(routerCtx)
+          const muted = Array.isArray(body?.muted) ? body.muted : []
+          const rules = await this.notifyRules.setMuted(muted)
+          this.json(routerCtx, 200, { ok: true, muted: rules.muted, updatedAt: rules.updatedAt })
+          return true
+        }
       }
 
       if (route === 'events' && routerCtx.method === 'GET') {
