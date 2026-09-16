@@ -331,6 +331,21 @@ export class FileManager {
     this.writeTimers.set(channelKey, timer)
   }
 
+  /**
+   * 拆频道的内部 key `${selfId}:${channelId}`。
+   * 注意只能按「第一个」冒号切：私聊的 channelId 本身就带冒号（`private:<openid>`），
+   * 用 split(':') 会切出 channelId='private'，把消息写进幽灵目录 chat-history/<selfId>/private/，
+   * 而读取走的是完整 key → 刷新后消息就"消失"了。
+   */
+  private static splitChannelKey(channelKey: string): { selfId: string; channelId: string } {
+    const index = String(channelKey || '').indexOf(':')
+    if (index <= 0) return { selfId: '', channelId: '' }
+    return {
+      selfId: channelKey.slice(0, index),
+      channelId: channelKey.slice(index + 1)
+    }
+  }
+
   // 刷新特定频道的待写入消息
   private async flushPendingMessages(channelKey: string) {
     const messagesToWrite = this.pendingMessages.get(channelKey)
@@ -339,7 +354,7 @@ export class FileManager {
     this.pendingMessages.delete(channelKey)
 
     const cachedMessages = this.peekCachedChannelMessages(channelKey)
-    const [selfId, channelId] = channelKey.split(':')
+    const { selfId, channelId } = FileManager.splitChannelKey(channelKey)
 
     if (!selfId || !channelId) return
 
@@ -440,7 +455,8 @@ export class FileManager {
     let cleanedCount = 0
 
     for (const channelKey of [...this.dirtyChannelKeys]) {
-      const [selfId, channelId] = channelKey.split(':')
+      // 私聊 channelId 自带冒号（private:xxx），这里同样只能按第一个冒号切
+      const { selfId, channelId } = FileManager.splitChannelKey(channelKey)
       if (!selfId || !channelId) {
         this.dirtyChannelKeys.delete(channelKey)
         continue
@@ -478,6 +494,41 @@ export class FileManager {
     })
 
     return counts
+  }
+
+  /**
+   * 批量取「每个频道最后一条消息」：频道列表默认就要显示最后一条消息预览，
+   * 但打开控制台时内存里一条消息都没有（get-chat-data 只返回元数据），
+   * 所以由一个接口统一按需读取，避免前端为每个频道各发一次请求。
+   * 读取量很小：每个频道只读索引 + 最后一个分片。
+   */
+  async getChannelPreviews(
+    channels: Array<{ selfId: string, channelId: string }>,
+    concurrency = 6
+  ): Promise<Record<string, MessageInfo | null>> {
+    await this.ensureMetadataLoaded()
+
+    const result: Record<string, MessageInfo | null> = {}
+    const queue = channels.filter(item => item && item.selfId && item.channelId)
+    if (!queue.length) return result
+
+    const workerCount = Math.max(1, Math.min(concurrency, queue.length))
+    const workers = Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const item = queue.shift()
+        if (!item) return
+        const channelKey = `${item.selfId}:${item.channelId}`
+        try {
+          const page = await this.readChannelMessagesPage(item.selfId, item.channelId, 1, 0)
+          result[channelKey] = page.messages[page.messages.length - 1] || null
+        } catch (error) {
+          result[channelKey] = null
+        }
+      }
+    })
+
+    await Promise.all(workers)
+    return result
   }
 
   async deleteChannelData(selfId: string, channelId: string) {
@@ -1085,6 +1136,56 @@ export class FileManager {
     }
 
     return changed
+  }
+
+  /**
+   * 把最近一条「正在发送」的机器人消息标记为发送失败。
+   * before-send 会先把消息写进历史，真实投递失败时用它把状态改回来，
+   * 免得 webui 里出现「群里其实没发出去」的消息。
+   */
+  async markLatestBotMessageFailed(selfId: string, channelId: string, error?: string): Promise<MessageInfo | undefined> {
+    const channelKey = `${selfId}:${channelId}`
+    const tempMessageId = this.peekLatestPendingBotMessageId(channelKey)
+    const reason = error ? String(error).slice(0, 200) : undefined
+
+    const apply = (message?: MessageInfo): MessageInfo | undefined => {
+      if (!message) return undefined
+      message.sending = false
+      message.failed = true
+      if (reason) message.failReason = reason
+      return message
+    }
+
+    // 1) 还在内存里的待发送记录
+    let matched = apply(this.pendingMessages.get(channelKey)?.find((message) => message.id === tempMessageId))
+    // 2) 频道消息缓存
+    if (!matched) {
+      matched = apply(this.peekCachedChannelMessages(channelKey)?.find((message) => message.id === tempMessageId))
+    }
+    // 3) 已经落盘的分块：先按临时 id 找，找不到就退化成「最近一条还在发送中的机器人消息」
+    if (!matched) {
+      const entry = this.createStoredChannelEntry(selfId, channelId)
+      const indexData = await this.loadOrCreateChannelIndex(selfId, channelId)
+      for (let index = indexData.chunks.length - 1; index >= 0 && !matched; index -= 1) {
+        const chunk = indexData.chunks[index]
+        const messages = await this.readChunkMessages(entry.channelDirPath, chunk.fileName)
+        const reversed = [...messages].reverse()
+        const hit = tempMessageId
+          ? reversed.find((message) => message.id === tempMessageId)
+          : reversed.find((message) => message.type === 'bot' && message.sending
+            && Date.now() - (Number(message.timestamp) || 0) < 120000)
+        if (!hit) continue
+        apply(hit)
+        matched = hit
+        await this.writeChunkMessages(entry.channelDirPath, chunk.fileName, messages)
+      }
+    } else {
+      // 只在内存里改到的：安排一次落盘，避免刷新后又变回「发送中」
+      this.scheduleWrite(channelKey)
+    }
+
+    if (tempMessageId) this.consumePendingBotMessageId(channelKey, tempMessageId)
+    return matched
   }
 
   private async findAndUpdateLatestBotMessage(selfId: string, channelId: string, realId: string): Promise<MessageInfo | undefined> {

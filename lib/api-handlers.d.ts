@@ -1,6 +1,7 @@
 import { Context } from 'koishi';
 import { FileManager } from './file-manager';
 import { MessageHandler } from './message-handler';
+import { ReadStateStore } from './read-state';
 import { Config } from './config';
 import { PluginLogger } from './logger';
 export declare class ApiHandlers {
@@ -9,12 +10,13 @@ export declare class ApiHandlers {
     private fileManager;
     private messageHandler;
     private logger;
+    private readState?;
     /** 最近一次临时视频（真流式转发的视频消息用） */
     private currentTempVideo;
     /** B 站卡片封面 OCR 结果缓存（懒加载，最多 200 条） */
     private ocrCache?;
     private privateStreams;
-    constructor(ctx: Context, config: Config, fileManager: FileManager, messageHandler: MessageHandler, logger: PluginLogger);
+    constructor(ctx: Context, config: Config, fileManager: FileManager, messageHandler: MessageHandler, logger: PluginLogger, readState?: ReadStateStore);
     /**
      * 统一注册控制台监听：带上 authority。
      * 启用 @koishijs/plugin-auth 后，未登录或权限不足的客户端调用这些接口会被拒绝；
@@ -38,6 +40,12 @@ export declare class ApiHandlers {
     }>;
     convertCmdInputTags(text: any): any;
     convertAtUserTags(text: any): any;
+    /**
+     * 发送没拿到消息 id = 实际上没发出去。
+     * 这时候必须把刚记下的那条机器人消息标成「发送失败」，
+     * 否则界面只弹一个报错提示，消息本身却看起来像正常发出去了。
+     */
+    private markSendFailed;
     isDirectChannel(channelId: any): boolean;
     toUserOpenId(channelId: any): string;
     sendMarkdownRequest(bot: any, channelId: any, request: any): Promise<any>;

@@ -42,6 +42,21 @@ body {
   display: none !important;
 }
 
+/* 手机端在独立窗口里右滑返回（回到会话列表）时，频道列表得显示出来，
+   否则整页会是一片空白（消息区被隐藏、频道列表又被上面那条规则藏了）。
+   规则放在后面覆盖前面，优先级相同。 */
+.qq-chat-wrapper.is-standalone:not(.is-sandbox-window).is-mobile-channels .chat-sidebar,
+.qq-chat-wrapper.is-standalone:not(.is-sandbox-window).is-mobile-channels .el-aside.chat-sidebar {
+  display: flex !important;
+}
+
+/* 右滑返回过程中（is-page-swiping）也要把会话列表露出来，
+   它比上面那条隐藏规则多了 is-page-swiping 一层，优先级更高 */
+.qq-chat-wrapper.is-standalone:not(.is-sandbox-window).is-page-swiping .chat-sidebar,
+.qq-chat-wrapper.is-standalone:not(.is-sandbox-window).is-page-swiping .el-aside.chat-sidebar {
+  display: flex !important;
+}
+
 .qq-chat-wrapper.is-standalone {
   position: fixed;
   inset: 0;

@@ -65,6 +65,9 @@ export interface MessageInfo {
   /** 群消息里是否 @ 了机器人（用于频道列表的「有人@你」提醒） */
   atBot?: boolean
   sending?: boolean
+  /** 这条机器人消息最终发送失败（QQ 拒收 / 无主动推送权限 / 网络错误） */
+  failed?: boolean
+  failReason?: string
   realId?: string
 }
 

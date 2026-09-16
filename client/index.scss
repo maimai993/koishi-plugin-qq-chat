@@ -5342,6 +5342,185 @@ html.dark .qq-chat-wrapper .chat-bubble.is-out .qq-chat-voice {
   line-height: 16px;
 }
 
+/* 「回到最新消息」按钮：列表右下角，滚离底部时出现 */
+.chat-scroll-bottom {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 6;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--k-border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 50%;
+  background: var(--k-card-bg, #fff);
+  color: var(--k-text-color-secondary, #666);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+  transition: transform var(--chat-dur, 0.15s) var(--chat-ease, ease), color var(--chat-dur, 0.15s) var(--chat-ease);
+}
+
+.chat-scroll-bottom:hover {
+  transform: translateY(-2px);
+  color: var(--k-color-primary, #0099ff);
+}
+
+/* 手机端：输入区是 fixed 浮在底部，按钮要抬到它上面并盖过它的层级 */
+.chat-scroll-bottom.is-mobile {
+  right: 14px;
+  z-index: 60;
+}
+
+/* 「N 条新消息」未读跳转按钮：QQ 风格的胶囊，点一下回到未读区域 */
+.chat-unread-jump {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--k-color-primary, #0099ff);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(0, 122, 255, 0.35);
+  cursor: pointer;
+  transition: transform var(--chat-dur, 0.15s) var(--chat-ease, ease), box-shadow var(--chat-dur, 0.15s) var(--chat-ease);
+}
+
+.chat-unread-jump:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 122, 255, 0.45);
+}
+
+.chat-unread-jump-count {
+  font-weight: 600;
+}
+
+.chat-unread-jump-text {
+  opacity: 0.92;
+}
+
+/* 手机端：输入区是 fixed 浮在底部，按钮要抬到它上面并盖过它的层级 */
+.chat-unread-jump.is-mobile {
+  right: 14px;
+  z-index: 61;
+}
+
+/* 未读分割线：打开群聊时标出「以下为新消息」 */
+.chat-unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+  color: var(--k-color-primary, #0099ff);
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.chat-unread-divider::before,
+.chat-unread-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, transparent, currentColor, transparent);
+  opacity: 0.45;
+}
+
+.chat-unread-divider > span {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chat-accent-soft, rgba(64, 128, 255, 0.14));
+}
+
+/* 跳到未读区域时高亮一下起点消息 */
+.chat-row.is-unread-flash {
+  animation: chat-unread-flash 1.6s var(--chat-ease, ease);
+}
+
+@keyframes chat-unread-flash {
+  0%, 100% { background: transparent; }
+  20%, 60% { background: var(--chat-accent-soft, rgba(64, 128, 255, 0.16)); }
+}
+
+/* 手机端右滑引用：气泡跟着手指平移 + 左侧「引用」提示 */
+.chat-row.is-swiping {
+  transition: none;
+  will-change: transform;
+  /* 新消息淡入动画用了 fill-mode: both，动画会一直压着行内的 transform，
+     不清掉的话「气泡跟手滑动」永远不会生效 */
+  animation: none;
+}
+
+.chat-swipe-quote-hint {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  white-space: nowrap;
+  transform: translateY(-50%) scale(0.9);
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--chat-accent-soft, rgba(64, 128, 255, 0.16));
+  color: var(--chat-accent-text, #4b8bf5);
+  font-size: 12px;
+  opacity: 0.6;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.chat-swipe-quote-hint.is-ready {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+/* 左滑引用：气泡往左走，「引用」出现在消息后面（右侧）
+   右滑返回：气泡往右走，「返回」出现在左侧 */
+.chat-swipe-quote-hint.is-right {
+  left: auto;
+  right: 6px;
+}
+
+.chat-swipe-quote-hint.is-left {
+  left: 6px;
+  right: auto;
+}
+
+/* 电脑端框选：Windows 资源管理器风格的虚线选择框 */
+.chat-select-box {
+  position: absolute;
+  z-index: 30;
+  border: 1px solid var(--k-color-primary, #0099ff);
+  background: color-mix(in srgb, var(--k-color-primary, #0099ff) 14%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* 拖动多选：正在框选的提示（复用多选态样式即可） */
+.chat-row.is-multi {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 发送失败的机器人消息标记 */
+.chat-msg-failed-tag {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(245, 108, 108, 0.16);
+  color: #f56c6c;
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
 /* 沙盒回复下的「发送到当前频道 / 编辑发送」 */
 .chat-sandbox-msg-actions {
   display: flex;
@@ -5453,4 +5632,196 @@ html.dark .qq-chat-wrapper .chat-bubble.is-out .qq-chat-voice {
   color: var(--chat-card-strong-sub);
   font-size: 12px;
   opacity: 0.7;
+}
+
+/* ============================================================
+ * 22. 右滑返回：整页跟手滑动 + 后面若隐若现的会话列表
+ * ============================================================ */
+/* 手机端：频道列表 <> 聊天页 之间的切换都走同一套缓动，别瞬移 */
+.qq-chat-wrapper .chat-sidebar {
+  transition: opacity 0.26s var(--chat-ease), transform 0.26s var(--chat-ease),
+    filter 0.26s var(--chat-ease);
+  transform-origin: left center;
+}
+
+.qq-chat-wrapper .el-main {
+  transition: transform 0.26s var(--chat-ease), opacity 0.26s var(--chat-ease),
+    box-shadow 0.26s var(--chat-ease);
+  will-change: transform;
+}
+
+/* 右滑中：聊天页浮在上面，会话列表在下面若隐若现 */
+.qq-chat-wrapper.is-page-swiping .el-main {
+  z-index: 3;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.16);
+}
+
+.qq-chat-wrapper.is-page-swiping .chat-sidebar,
+.qq-chat-wrapper.is-page-swiping .el-aside.chat-sidebar {
+  display: flex !important;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* 「返回」提示：跟着页面一起滑，越滑越清晰 */
+.chat-page-back-hint {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  z-index: 5;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: var(--chat-accent-soft, rgba(64, 128, 255, 0.16));
+  color: var(--chat-accent-text, #4b8bf5);
+  font-size: 12.5px;
+  line-height: 1.6;
+  transform: translateY(-50%) scale(0.9);
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 0.16s var(--chat-ease), transform 0.16s var(--chat-ease);
+}
+
+.chat-page-back-hint.is-ready {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+/* ============================================================
+ * 23. 交互动画统一加固（弹层 / 面板 / 列表 / 按钮）
+ * ============================================================ */
+/* 会话列表项：悬停轻抬 + 选中态过渡 */
+.qq-chat-wrapper .chat-channel-item {
+  transition: background-color var(--chat-dur) var(--chat-ease),
+    border-color var(--chat-dur) var(--chat-ease),
+    transform 0.18s var(--chat-ease);
+}
+
+@media (hover: hover) {
+  .qq-chat-wrapper .chat-channel-item:hover {
+    transform: translateX(2px);
+  }
+}
+
+.qq-chat-wrapper .chat-channel-item:active {
+  transform: scale(0.985);
+}
+
+/* 消息行：悬停给一点反馈（跟随气泡的滑动不受影响） */
+.qq-chat-wrapper .chat-row {
+  transition: background-color 0.18s var(--chat-ease);
+}
+
+/* 右键菜单 / B 站搜索结果等浮层：出现时淡入上浮 */
+.chat-menu,
+.chat-bili-pop,
+.chat-sandbox-pop,
+.chat-emojis-pop {
+  animation: chat-fade-up 0.16s var(--chat-ease) both;
+}
+
+/* 输入区：聚焦时轻微上浮 + 阴影 */
+.qq-chat-wrapper .chat-composer,
+.qq-chat-wrapper .chat-input-area {
+  transition: box-shadow 0.2s var(--chat-ease), transform 0.2s var(--chat-ease),
+    border-color 0.2s var(--chat-ease);
+}
+
+/* 各种悬浮按钮：出现时弹一下 */
+.chat-scroll-bottom,
+.chat-unread-jump,
+.chat-drag-out-hint,
+.chat-back-top {
+  animation: chat-pop-in 0.18s var(--chat-ease) both;
+}
+
+/* 未读分割线 / 框选框：淡入 */
+.chat-unread-divider {
+  animation: chat-fade-in 0.24s var(--chat-ease) both;
+}
+
+.chat-select-box {
+  animation: chat-fade-in 0.1s var(--chat-ease) both;
+}
+
+/* 回复预览 / 待发送文件条 / 图片缩略图：出现时弹一下 */
+.chat-reply-preview,
+.chat-file-chip,
+.qq-chat-wrapper .chat-upload-row,
+.qq-chat-wrapper .chat-image-chip {
+  animation: chat-pop-in 0.18s var(--chat-ease) both;
+}
+
+.chat-reply-preview {
+  transition: opacity 0.18s var(--chat-ease), transform 0.18s var(--chat-ease);
+}
+
+/* 悬浮播放器（B 站 / 网易云）：淡入 + 轻微放大 */
+.chat-bili-float,
+.chat-netease-float {
+  animation: chat-pop-in 0.22s var(--chat-ease) both;
+}
+
+/* 拖拽文件遮罩：淡入 */
+.chat-drop-overlay,
+.chat-drop-hint {
+  animation: chat-fade-in 0.16s var(--chat-ease) both;
+}
+
+/* 对话框（群设置 / 收藏 / 合并转发 / 查看图片…）：内容跟着淡入 */
+.chat-settings-dialog .el-dialog__body,
+.chat-fav-dialog .el-dialog__body,
+.chat-forward-dialog .el-dialog__body,
+.image-viewer-dialog .el-dialog__body,
+.chat-raw-dialog .el-dialog__body,
+.chat-user-profile-dialog .el-dialog__body {
+  animation: chat-fade-up 0.2s var(--chat-ease) both;
+}
+
+/* 按钮 / 工具按钮：统一悬停与按下反馈 */
+.qq-chat-wrapper .el-button,
+.qq-chat-wrapper .chat-tool-btn {
+  transition: transform 0.14s var(--chat-ease), background-color var(--chat-dur) var(--chat-ease),
+    color var(--chat-dur) var(--chat-ease), border-color var(--chat-dur) var(--chat-ease),
+    box-shadow var(--chat-dur) var(--chat-ease);
+}
+
+.qq-chat-wrapper .el-button:active,
+.qq-chat-wrapper .chat-tool-btn:active {
+  transform: scale(0.94);
+}
+
+/* 标签页 / 分段控件：指示条与文字一起过渡 */
+.chat-sidebar-tab,
+.qq-chat-wrapper .el-radio-button__inner,
+.qq-chat-wrapper .el-tabs__item {
+  transition: background-color var(--chat-dur) var(--chat-ease), color var(--chat-dur) var(--chat-ease),
+    box-shadow var(--chat-dur) var(--chat-ease), transform 0.14s var(--chat-ease);
+}
+
+/* 徽章 / 角标：状态变化时过渡 */
+.chat-count-badge,
+.chat-sidebar-count,
+.chat-msg-failed-tag,
+.chat-proactive-badge {
+  transition: transform 0.16s var(--chat-ease), opacity 0.16s var(--chat-ease);
+}
+
+@keyframes chat-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes chat-pop-in {
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* 无障碍：跟随系统「减少动态效果」（覆盖上面新增的动画） */
+@media (prefers-reduced-motion: reduce) {
+  .qq-chat-wrapper *,
+  .qq-chat-wrapper *::before,
+  .qq-chat-wrapper *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

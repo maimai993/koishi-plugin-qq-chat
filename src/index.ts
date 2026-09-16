@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import { MessageHandler } from './message-handler'
 import { FileManager } from './file-manager'
 import { ApiHandlers } from './api-handlers'
+import { ReadStateStore } from './read-state'
 import { Config } from './config'
 import { createPluginLogger } from './logger'
 import { Utils } from './utils'
@@ -43,8 +44,11 @@ export async function apply(ctx: Context, config: Config) {
   const fileManager = new FileManager(ctx, config, pluginLogger)
   await fileManager.initialize()
 
-  const messageHandler = new MessageHandler(ctx, config, fileManager, pluginLogger)
-  const apiHandlers = new ApiHandlers(ctx, config, fileManager, messageHandler, pluginLogger)
+  // 未读状态持久化（刷新/重启后未读数与「未读区域」的起点都还在）
+  const readState = new ReadStateStore(ctx.baseDir, pluginLogger)
+
+  const messageHandler = new MessageHandler(ctx, config, fileManager, pluginLogger, readState)
+  const apiHandlers = new ApiHandlers(ctx, config, fileManager, messageHandler, pluginLogger, readState)
   const utils = new Utils(config, ctx)
 
   const metadata = await fileManager.readMetadataOnly()
@@ -65,6 +69,11 @@ export async function apply(ctx: Context, config: Config) {
   ctx.on('before-send', (session) => {
     // 只记录 QQ 平台消息（recordBotMessage 内部已做平台过滤）
     messageHandler.recordBotMessage(session, Date.now())
+  })
+
+  // 机器人上线也要挂上发送包装（bot 可能在插件 ready 之后才连上）
+  ctx.on('login-added', () => {
+    messageHandler.wrapBotSenders()
   })
 
   // 群成员加入 / 退出：在消息列表中间显示系统提示
@@ -95,6 +104,9 @@ export async function apply(ctx: Context, config: Config) {
 
   ctx.on('ready', async () => {
     pluginLogger.logInfo('插件启动完成，开始监听消息')
+
+    // 真实发送结果回写（成功 → 已发送；失败 → 标记发送失败）
+    messageHandler.wrapBotSenders()
 
     // Markdown 面板的图片上传需要 assets 服务（推荐 koishi-plugin-assets-qqbot-part-file）
     if ((ctx as any).assets?.upload) {
@@ -420,6 +432,7 @@ export async function apply(ctx: Context, config: Config) {
     cleanupInterval?.()
     messageHandler.dispose()
     void fileManager.dispose()
+    void readState.dispose()
     pluginLogger.logInfo('插件已卸载，所有待处理的消息已写入')
   })
 }

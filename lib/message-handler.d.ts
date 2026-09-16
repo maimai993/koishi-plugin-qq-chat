@@ -1,5 +1,6 @@
 import { Context, Session } from 'koishi';
 import { FileManager } from './file-manager';
+import { ReadStateStore } from './read-state';
 import { Config } from './config';
 import { PluginLogger } from './logger';
 export declare class MessageHandler {
@@ -7,13 +8,38 @@ export declare class MessageHandler {
     private config;
     private fileManager;
     private logger;
+    private readState?;
     private utils;
     private correctChannelIds;
     private scheduledTasks;
     private channelRefreshInFlight;
     private lastChannelRefreshAt;
     private readonly CHANNEL_REFRESH_TTL_MS;
-    constructor(ctx: Context, config: Config, fileManager: FileManager, logger: PluginLogger);
+    constructor(ctx: Context, config: Config, fileManager: FileManager, logger: PluginLogger, readState?: ReadStateStore);
+    /**
+     * 给真实机器人的发送方法包一层：before-send 已经先把消息写进历史了，
+     * 这里等真实投递结束再回写状态 ——
+     *  - 成功：从「发送中」变成已发送，并补上真实消息 id
+     *  - 失败：标记成「发送失败」（QQ 拒收、无主动推送权限、网络错误…），
+     *    否则 webui 里会把没发出去的消息当成正常消息显示
+     */
+    /** 从适配器抛出的错误里抠出人能看懂的失败原因 */
+    private describeSendError;
+    /** 从 QQ 接口地址里推出本地频道号（/v2/groups/{id}/... 或 /v2/users/{openid}/...） */
+    private channelIdFromApiUrl;
+    /** 从发送返回值里抠出消息 id */
+    private extractMessageId;
+    /**
+     * 统一的「发送出口」包装：成功回写真实消息 id，失败（含返回空数组）标记「发送失败」。
+     *
+     * 以前只包了 sendMessage / sendPrivateMessage / sendGroupMessage，可插件里还有两条
+     * 出口会真的把消息发到 QQ：
+     *   - bot.internal.*：原生 markdown、QQ 表情、上传文件、流式消息
+     *   - bot.http.post：直接打 /v2/.../messages、/files、/stream_messages、/panels
+     * 这两条路失败时不会被标记，界面上就留下一条「看起来发成功了」的消息。
+     */
+    private wrapOutgoingSender;
+    wrapBotSenders(): void;
     /** 广播带 authority：启用 auth 插件后未登录的客户端收不到聊天内容 */
     private broadcast;
     private isAtBotMessage;

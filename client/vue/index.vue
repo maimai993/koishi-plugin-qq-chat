@@ -1,6 +1,6 @@
 <template>
   <div
-    :class="['qq-chat-wrapper absolute inset-0 flex overflow-hidden bg-[var(--k-page-bg)] text-[var(--k-text-color)] font-sans', props.standalone ? 'is-standalone' : '', props.sandbox ? 'is-sandbox-window' : '']"
+    :class="['qq-chat-wrapper absolute inset-0 flex overflow-hidden bg-[var(--k-page-bg)] text-[var(--k-text-color)] font-sans', props.standalone ? 'is-standalone' : '', props.sandbox ? 'is-sandbox-window' : '', isMobile && mobileView === 'channels' ? 'is-mobile-channels' : '', pageSwiping ? 'is-page-swiping' : '']"
     :style="[wallpaperStyle, isMobile ? 'height: 100dvh; width: 100vw; position: fixed; top: 0; left: 0;' : 'height: 100%; width: 100%;']"
     @dragenter.prevent="onWindowDragEnter" @dragover.prevent="onWindowDragOver"
     @dragleave="onWindowDragLeave" @drop.prevent="onWindowDrop">
@@ -35,12 +35,13 @@
     <el-container class="h-full w-full overflow-hidden">
       <!-- 左侧栏：合并所有机器人的频道列表 -->
       <el-aside v-show="!isMobile || mobileView === 'channels'"
+        :style="peekSidebarStyle"
         :width="isMobile ? '100%' : sidebarWidth + 'px'"
         class="chat-sidebar flex flex-col border-r border-[var(--k-border-color)] bg-[var(--k-page-bg)] brightness-95 dark:brightness-90 h-full overflow-hidden">
         <!-- 频道列表（合并所有机器人） -->
         <div
           class="chat-sidebar-head flex h-14 items-center px-4 font-bold border-b border-[var(--k-border-color)] text-lg text-[var(--k-text-color)] flex-shrink-0">
-          <el-button v-if="isMobile" icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
+          <el-button v-if="isMobile" :icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
           <span class="chat-sidebar-title">频道</span>
           <span v-if="unreadTotal" class="chat-sidebar-count is-unread" :title="`未读消息 ${unreadTotal} 条`">{{ unreadTotal > 99 ? '99+' : unreadTotal }}</span>
         </div>
@@ -57,9 +58,9 @@
           <div v-if="filteredChannels.length === 0" class="p-10 text-center opacity-40 text-sm">暂无频道数据</div>
           <div v-for="channel in filteredChannels" :key="`${channel.selfId}:${channel.id}`"
             :class="['chat-channel-item flex items-center p-4 cursor-pointer transition-all hover:bg-[var(--k-button-hover-bg)] border-l-4 border-transparent', { 'is-active !border-[var(--k-color-primary)] bg-[var(--k-button-active-bg)] text-[var(--k-color-primary)]': selectedBot === channel.selfId && selectedChannel === channel.id, 'is-drop-target': dropTargetKey === `${channel.selfId}:${channel.id}` }]"
-            :draggable="!isMobile"
-            @click="selectChannel(channel.id, channel.selfId)" @contextmenu.prevent="onChannelMenu($event, channel)"
-            @dragstart="onChannelDragStart($event, channel)" @dragend="onChannelDragEnd"
+            :draggable="false"
+            @click="onChannelClick(channel)" @contextmenu.prevent="onChannelMenu($event, channel)"
+            @pointerdown="onChannelPointerDown($event, channel)"
             @dragover="onChannelDragOver($event, channel)" @dragleave="onChannelDragLeave"
             @drop.stop.prevent="onChannelDrop($event, channel)">
             <span class="chat-channel-avatar" :style="channelAvatarStyle(channel)">{{ channelInitial(channel) }}</span>
@@ -91,11 +92,15 @@
 
       <!-- 消息主区域 -->
       <el-main v-show="(!isMobile && selectedBot && selectedChannel) || (isMobile && mobileView === 'messages')"
-        :class="['flex flex-col p-0 bg-[var(--k-page-bg)] relative brightness-105 dark:brightness-100 h-full overflow-hidden']">
+        :class="['flex flex-col p-0 bg-[var(--k-page-bg)] relative brightness-105 dark:brightness-100 h-full overflow-hidden', pageSwiping ? 'is-page-swiping' : '']"
+        :style="pageSwipeStyle">
+        <!-- 右滑返回时，跟在页面上的「返回」提示（越滑越亮） -->
+        <span v-if="pageSwiping" class="chat-page-back-hint"
+          :class="{ 'is-ready': pageSwipeProgress >= 0.5 }">返回</span>
         <template v-if="selectedBot && selectedChannel">
           <div
             class="chat-header flex h-14 items-center px-4 font-bold border-b border-[var(--k-border-color)] bg-[var(--k-card-bg)] shadow-sm z-10 text-[var(--k-text-color)]">
-            <el-button v-if="isMobile" icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
+            <el-button v-if="isMobile" :icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
             <span class="chat-header-title truncate min-w-0 flex-1">{{ currentChannelName }}</span>
             <div class="flex items-center gap-2 flex-shrink-0 ml-2">
               <template v-if="currentChannelInfo?.botState">
@@ -139,8 +144,13 @@
             <el-button v-if="sandboxToggleable" size="small" type="primary" @click="toggleSandboxMode">退出沙盒</el-button>
           </div>
 
-          <div :class="['flex-1 overflow-hidden relative bg-opacity-50 bg-gray-100 dark:bg-black/20']">
-            <el-scrollbar ref="scrollRef" @scroll="handleScroll" class="h-full">
+          <div ref="messageAreaRef"
+            :class="['flex-1 overflow-hidden relative bg-opacity-50 bg-gray-100 dark:bg-black/20']"
+            @touchstart.passive="onBlankSwipeStart"
+            @touchmove.passive="onBlankSwipeMove"
+            @touchend="onBlankSwipeEnd"
+            @mousedown="onRowMouseDown">
+            <el-scrollbar ref="scrollRef" @scroll="handleScroll" class="chat-message-scroll h-full">
               <div class="p-6 flex flex-col"
                 :style="isMobile ? { paddingBottom: 'calc(180px + env(safe-area-inset-bottom))' } : { minHeight: '100%' }">
                 <div v-if="isLoadingHistory" class="flex justify-center py-4">
@@ -157,9 +167,24 @@
                 </div>
                 <template v-for="(msg, idx) in normalMessages" :key="msg.id">
                 <div v-if="isNewDay(idx)" class="chat-day-divider"><span>{{ dayLabel(msg.timestamp) }}</span></div>
+                <!-- 未读分割线：打开群聊时插在第一条未读消息之前 -->
+                <div v-if="unreadAnchor && unreadAnchor.firstId === String(msg.id)"
+                  class="chat-unread-divider" :data-unread-key="unreadAnchor.key">
+                  <span>以下为新消息</span>
+                </div>
                 <div :data-id="msg.id"
-                  :class="['chat-row flex mb-6 gap-3 group', (msg.isBot || msg.userId === selectedBot) ? 'flex-row-reverse is-self' : 'flex-row is-other', isGroupStart(idx) ? 'is-group-start' : 'is-grouped', multiMode ? 'is-multi' : '', multiMode && isMultiSelected(msg.id) ? 'is-multi-on' : '', msg.atBot ? 'is-at-bot' : '']"
-                  @click="multiMode ? toggleMultiSelect(msg.id) : null">
+                  :class="['chat-row flex mb-6 gap-3 group', (msg.isBot || msg.userId === selectedBot) ? 'flex-row-reverse is-self' : 'flex-row is-other', isGroupStart(idx) ? 'is-group-start' : 'is-grouped', multiMode ? 'is-multi' : '', multiMode && isMultiSelected(msg.id) ? 'is-multi-on' : '', msg.atBot ? 'is-at-bot' : '', swipeFollow.id === msg.id && swipeFollow.dx ? 'is-swiping' : '']"
+                  :style="swipeFollow.id === msg.id && swipeFollow.dx ? { transform: 'translateX(' + swipeFollow.dx + 'px)' } : {}"
+                  @click="multiMode ? toggleMultiSelect(msg.id) : null"
+                  @touchstart.passive="onRowSwipeStart($event, msg)"
+                  @touchmove.passive="onRowSwipeMove($event)"
+                  @touchend.passive="onRowSwipeEnd($event, msg)">
+                  <!-- 手机端横向滑动提示：左滑引用（提示在消息后面），右滑返回 -->
+                  <span v-if="swipeFollow.id === msg.id && Math.abs(swipeFollow.dx) > 16"
+                    class="chat-swipe-quote-hint"
+                    :class="[swipeFollow.mode === 'quote' ? 'is-right' : 'is-left', (swipeFollow.mode === 'quote' ? -swipeFollow.dx : swipeFollow.dx) >= (swipeFollow.mode === 'quote' ? 56 : 70) ? 'is-ready' : '']">
+                    {{ swipeFollow.mode === 'quote' ? '引用' : '返回' }}
+                  </span>
                   <span v-if="multiMode" class="chat-multi-check" @click.stop="toggleMultiSelect(msg.id)">
                     <span class="chat-checkbox" :class="{ 'is-checked': isMultiSelected(msg.id) }"></span>
                   </span>
@@ -175,6 +200,9 @@
                       <span class="font-bold" :class="{ 'opacity-70': msgDisplayName(msg) === '系统消息' }">{{ msgDisplayName(msg) }}</span>
                       <!-- 沙盒产生、还没真的发到 QQ 的消息，标一下来源 -->
                       <span v-if="msg.sandbox" class="chat-sandbox-msg-tag" title="沙盒拦截到的回复：还没发到 QQ">沙盒</span>
+                      <!-- 真实发送失败的机器人消息（QQ 拒收 / 无主动推送权限等） -->
+                      <span v-if="msg.failed" class="chat-msg-failed-tag"
+                        :title="msg.failReason ? '发送失败：' + msg.failReason : '发送失败（QQ 没有接收这条消息）'">发送失败</span>
                       <el-button v-if="msg.systemType === 'join-request'" size="small" type="primary" plain
                         class="!h-6 !px-2 !text-xs" @click.stop="openManageGroup(msg.selfId, msg.channelId)">去处理</el-button>
                       <span class="opacity-60">{{ formatTime(msg.timestamp) }}</span>
@@ -382,6 +410,9 @@
                               @click.stop="forwardSandboxMessage(msg)">发送到当前频道</button>
                             <button type="button" class="chat-sandbox-btn" :disabled="sandboxForwarding"
                               @click.stop="openElementEditor(msg.elements || visibleElements(msg), `这条来自沙盒指令回复，改完再发到 QQ`)">编辑发送</button>
+                            <button type="button" class="chat-sandbox-btn" :disabled="mdChannelSending"
+                              title="把这条回复按 QQ 原生 Markdown 发送到当前频道（保留格式 / 按钮 / 链接）"
+                              @click.stop="sendMarkdownToChannel(sandboxReplyMarkdown(msg))">以 MD 发送</button>
                           </div>
                         </div>
                       </div>
@@ -391,6 +422,35 @@
                 </template>
               </div>
             </el-scrollbar>
+            <!-- 电脑端框选时的虚线选择框（Windows 资源管理器那种） -->
+            <div v-if="selectBox.active" class="chat-select-box" :style="{
+              left: selectBox.left + 'px',
+              top: selectBox.top + 'px',
+              width: selectBox.width + 'px',
+              height: selectBox.height + 'px'
+            }"></div>
+            <!-- 未读区域跳转：分割线不在视野里时出现，点一下回到未读区域 -->
+            <button v-if="unreadJumpActive && unreadAnchor" type="button" class="chat-unread-jump"
+              :class="{ 'is-mobile': isMobile }" :style="unreadJumpStyle"
+              :title="`跳到未读区域（${unreadAnchor.count} 条新消息）`" @click="jumpToUnread">
+              <span class="chat-unread-jump-count">{{ unreadAnchor.count > 99 ? '99+' : unreadAnchor.count }}</span>
+              <span class="chat-unread-jump-text">条新消息</span>
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path d="M8 3.6v8M4.8 8.4L8 11.6l3.2-3.2" fill="none" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <!-- 回到最新消息（滚离底部时才出现） -->
+            <button v-if="showScrollToBottom" type="button" class="chat-scroll-bottom"
+              :class="{ 'is-mobile': isMobile }"
+              :style="isMobile ? { bottom: 'calc(env(safe-area-inset-bottom, 0px) + ' + ((keyboardHeight || 0) + 186) + 'px)' } : {}"
+              title="回到最新消息" @click="scrollToBottom">
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M8 3v8.2M4.4 7.6L8 11.2l3.6-3.6" fill="none" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M4 13.2h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
+            </button>
           </div>
 
           <!-- 网易云悬浮播放器 -->
@@ -442,7 +502,7 @@
               </div>
             </div>
             <div v-if="replyingTo"
-              class="mb-2 px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-lg flex items-center justify-between text-xs">
+              class="chat-reply-preview mb-2 px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-lg flex items-center justify-between text-xs">
               <div class="flex items-center gap-2 truncate opacity-70">
                 <el-icon>
                   <ChatLineRound />
@@ -619,6 +679,13 @@
                     <span class="chat-send-menu-check">{{ sendKeyMode === 'ctrlEnter' ? '✓' : '' }}</span>
                     <span>按 Ctrl + Enter 键发送消息</span>
                   </div>
+                  <!-- 沙盒模式：把输入框内容按 QQ 原生 Markdown 直接发到当前频道 -->
+                  <div v-if="sandboxMode" class="chat-send-menu-item"
+                    :title="'以 QQ 原生 Markdown 直接发送到当前频道（不走沙盒）'"
+                    @click="sendKeyMenuVisible = false; sendMarkdownToChannel(inputText, '先在输入框里写要发送的 Markdown 内容')">
+                    <span class="chat-send-menu-check">{{ mdChannelSending ? '…' : '' }}</span>
+                    <span>以 Markdown 格式发送到当前频道</span>
+                  </div>
                 </div>
               </div>
               </div>
@@ -690,7 +757,7 @@
         class="flex flex-col p-0 bg-[var(--k-page-bg)] absolute inset-0 z-50 overflow-hidden" style="height: 100dvh;">
         <div
           class="flex h-14 items-center px-4 font-bold border-b border-[var(--k-border-color)] bg-[var(--k-card-bg)] shadow-sm">
-          <el-button icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
+          <el-button :icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
           <span>聊天记录</span>
         </div>
         <el-scrollbar class="flex-1 bg-gray-50 dark:bg-black/10">
@@ -715,7 +782,7 @@
         class="flex flex-col p-0 bg-black absolute inset-0 z-[60] overflow-hidden" style="height: 100dvh;">
         <div
           class="flex h-14 items-center px-4 font-bold border-b border-white/10 bg-black text-white shadow-sm flex-shrink-0">
-          <el-button icon="ArrowLeft" circle size="small" class="mr-3 !bg-white/10 !border-none !text-white"
+          <el-button :icon="ArrowLeft" circle size="small" class="mr-3 !bg-white/10 !border-none !text-white"
             @click="goBack" />
           <span class="truncate mr-2">查看图片</span>
           <div class="flex-1"></div>
@@ -740,7 +807,7 @@
         class="flex flex-col p-0 bg-[var(--k-page-bg)] absolute inset-0 z-[80] overflow-hidden" style="height: 100dvh;">
         <div
           class="flex h-14 items-center px-4 font-bold border-b border-[var(--k-border-color)] bg-[var(--k-card-bg)] shadow-sm">
-          <el-button icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
+          <el-button :icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
           <div class="flex-1 text-center pr-8">原始消息报文</div>
         </div>
         <div class="p-4 flex flex-col gap-4 h-full overflow-hidden">
@@ -758,7 +825,7 @@
         class="flex flex-col p-0 bg-[var(--k-page-bg)] absolute inset-0 z-[70] overflow-hidden" style="height: 100dvh;">
         <div
           class="flex h-14 items-center px-4 font-bold border-b border-[var(--k-border-color)] bg-[var(--k-card-bg)] shadow-sm">
-          <el-button icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
+          <el-button :icon="ArrowLeft" circle size="small" class="mr-3" @click="goBack" />
           <div class="flex-1 text-center pr-8">用户资料</div>
         </div>
         <div class="p-8 flex flex-col items-center gap-6">
@@ -1474,14 +1541,17 @@ const {
   sandboxVisible, sandboxInput, sandboxRunning, sandboxMessages, openSandbox, clearSandbox, closeSandbox, runSandbox, forwardSandboxResult,
   sandboxImages, sandboxUploading, addSandboxImages, removeSandboxImage,
   // 沙盒窗口
-  sandboxMode, targetSelfId, targetChannelId, enterSandbox, sendSandboxMessage, sandboxSending,
+  sandboxMode, dataReady, targetSelfId, targetChannelId, enterSandbox, sendSandboxMessage, sandboxSending,
   forwardSandboxMessage, sandboxForwarding, clearSandboxWindow, resetSandboxSession,
+  sendMarkdownToChannel, sandboxReplyMarkdown, mdChannelSending,
   elementEditorVisible, elementEditorText, elementEditorElements, elementEditorSending, elementEditorHint,
   openElementEditor, removeElementEditorItem, sendEditedElements,
   togglePinBot, togglePinChannel, deleteBotData, deleteChannelData,
   getCachedImageUrl, cacheImage, loadVideo, isVideoLoading, isVideoLoaded, showForward, openImageViewer, handleImageWheel, downloadImage, handleScroll,
   repeatMessage, handlePaste, uploadImageDataUrl, copyToClipboard, onBotMenu, onChannelMenu, onMessageMenu, onUserMenu, handleMenuAction, handleMessageAction, showUserProfile,
   menu, inputRef, focusChatInput, scrollToMessage, notifications, dismissNotification, gotoNotification, refreshBotState,
+  showScrollToBottom, scrollToBottom, setMultiSelected,
+  unreadAnchor, unreadJumpActive, jumpToUnread, getChannelPreview, loadChannelPreviews,
   // 收藏 / 多选 / 转发 / 隐藏频道
   favorites, favoritesVisible, removeFavorite, clearFavorites, copyFavorite, prefetchFavoriteImage,
   multiMode, multiSelected, toggleMultiMode, isMultiSelected, toggleMultiSelect, exitMultiMode, deleteMultiLocal, copyMulti,
@@ -1652,6 +1722,13 @@ const playVoiceBubble = async (el: HTMLElement | null) => {
 // ========== 以下为模板中使用的本地变量和函数 ==========
 
 // 当前选中频道的完整信息
+// 未读跳转按钮的位置：手机端浮在输入区上方，并与「回到最新消息」按钮错开
+const unreadJumpStyle = computed(() => {
+  const stack = showScrollToBottom.value ? 50 : 0
+  if (!isMobile.value) return { bottom: `${18 + stack}px` }
+  return { bottom: `calc(env(safe-area-inset-bottom, 0px) + ${(keyboardHeight.value || 0) + 186 + stack}px)` }
+})
+
 const currentChannelInfo = computed(() => {
   return currentChannels.value.find(c => c.id === selectedChannel.value && c.selfId === selectedBot.value) || null
 })
@@ -2195,6 +2272,8 @@ const cmdReference = ref(false)
 
 // B 站相关
 const biliSearchOpenId = ref('')
+// 消息区域容器（滚动视口）：框选的选择框坐标、命中判断都以它为基准
+const messageAreaRef = ref<HTMLElement | null>(null)
 const biliSearchState = reactive({
   loading: false,
   results: [] as any[],
@@ -2539,7 +2618,11 @@ const filteredChannels = computed(() => {
   return list.filter((c: any) => String(c.name || '').toLowerCase().includes(kw) || String(c.id || '').includes(kw))
 })
 
+// 最后一条消息：内存里没有（刚打开控制台）就用后端批量读来的预览，
+// 于是「所有频道默认都有一条消息预览」，不用等用户点进频道
 const lastChannelMessage = (channel: any) => {
+  const preview = getChannelPreview(channel.selfId, channel.id) as any
+  if (preview) return preview
   const msgs = getMessages(channel.selfId, channel.id) as any[]
   return msgs && msgs.length ? msgs[msgs.length - 1] : null
 }
@@ -2894,6 +2977,17 @@ const mdSafeUrl = (url: string, image = false) => {
   return ''
 }
 
+// 远程图片（QQ 表情 apng、卡片封面…）不能直接引用：QQ 的 CDN 会 403。
+// 统一改写成服务端下载代理 /qq-chat/fetch-image?u=...，由服务端带 Referer/UA 下载缓存后再本地显示。
+const mdProxyImage = (url: string) => {
+  if (!/^https?:\/\//i.test(url)) return url
+  // 本机地址（127.0.0.1 / localhost）与公开表情站可以直接用
+  if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url)) return url
+  if (/koishi\.js\.org\/QFace\//i.test(url)) return url
+  if (url.includes('/qq-chat/media/') || url.includes('/qq-chat/fetch-image')) return url
+  return `/qq-chat/fetch-image?u=${encodeURIComponent(url)}`
+}
+
 const renderMarkdown = (src: string) => {
   if (!src) return ''
   let html = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -2901,7 +2995,9 @@ const renderMarkdown = (src: string) => {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m: string, alt: string, url: string) => {
     const safe = mdSafeUrl(url, true)
-    return safe ? `<img src="${mdEscapeAttr(safe)}" alt="${mdEscapeAttr(alt)}" style="max-width:100%"/>` : mdEscapeAttr(alt)
+    return safe
+      ? `<img src="${mdEscapeAttr(mdProxyImage(safe))}" alt="${mdEscapeAttr(alt)}" style="max-width:100%"/>`
+      : mdEscapeAttr(alt)
   })
   html = html.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_m: string, text: string, url: string) => {
     const safe = mdSafeUrl(url)
@@ -3866,6 +3962,286 @@ declare module 'vue' {
   }
 }
 
+// ===== 手机端：消息横向滑动 =====
+// 向左滑 → 引用这条消息（气泡跟手一起滑，右侧露出「引用」两个字）
+// 向右滑 → 返回会话列表：整页跟着手指右滑，后面露出若隐若现的会话列表，
+//          松手够远就顺势滑出去并完成返回，不够远就弹回去
+const swipeFollow = reactive({ id: '', dx: 0, mode: '' as '' | 'quote' | 'back' })
+let rowSwipeStart: { x: number; y: number; id: string; rawDx: number } | null = null
+const SWIPE_QUOTE_AT = 56
+const SWIPE_MAX = 96
+
+// ===== 整页右滑返回（跟手 + 回弹/滑出动画）=====
+const pageSwipe = reactive({ active: false, animating: false, dx: 0 })
+const PAGE_SWIPE_AT = 70
+const PAGE_SWIPE_MAX = 340
+const pageSwiping = computed(() => pageSwipe.active || pageSwipe.animating)
+const pageSwipeProgress = computed(() => Math.min(1, Math.max(0, pageSwipe.dx / 240)))
+
+const pageSwipeStyle = computed(() => {
+  if (!pageSwiping.value) return {}
+  return {
+    transform: `translateX(${Math.round(pageSwipe.dx)}px)`,
+    transition: pageSwipe.animating ? 'transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1)' : 'none'
+  }
+})
+// 后面那层会话列表：随手指「若隐若现」（透明度 + 轻微缩放 + 模糊）
+const peekSidebarStyle = computed(() => {
+  if (!pageSwiping.value) return {}
+  const p = pageSwipeProgress.value
+  return {
+    opacity: String(0.28 + 0.72 * p),
+    transform: `scale(${(0.94 + 0.06 * p).toFixed(3)})`,
+    filter: `blur(${(2.4 - 2.4 * p).toFixed(2)}px)`
+  }
+})
+
+const beginPageBack = (dx: number) => {
+  if (!isMobile.value || mobileView.value === 'channels') return
+  if (!pageSwipe.active) {
+    pageSwipe.active = true
+    pageSwipe.animating = false
+  }
+  pageSwipe.dx = Math.min(PAGE_SWIPE_MAX, Math.max(0, dx * 0.92))
+}
+
+const cancelPageBack = () => {
+  if (!pageSwipe.active) return
+  pageSwipe.animating = true
+  pageSwipe.dx = 0
+  setTimeout(() => {
+    pageSwipe.active = false
+    pageSwipe.animating = false
+  }, 280)
+}
+
+const finishPageBack = (dx: number) => {
+  if (!pageSwipe.active) return false
+  if (dx < PAGE_SWIPE_AT) {
+    cancelPageBack()
+    return true
+  }
+  pageSwipe.animating = true
+  pageSwipe.dx = Math.max(window.innerWidth, pageSwipe.dx)
+  setTimeout(() => {
+    goBack()
+    // 等视图切到会话列表后再收尾（否则会看到页面弹回去闪一下）
+    setTimeout(() => {
+      pageSwipe.active = false
+      pageSwipe.animating = false
+      pageSwipe.dx = 0
+    }, 80)
+  }, 240)
+  return true
+}
+
+const onRowSwipeStart = (e: TouchEvent, msg: any) => {
+  if (!isMobile.value || multiMode.value) return
+  const t = e.touches[0]
+  if (!t) return
+  rowSwipeStart = { x: t.clientX, y: t.clientY, id: String(msg.id), rawDx: 0 }
+  swipeFollow.id = ''
+  swipeFollow.dx = 0
+  swipeFollow.mode = ''
+}
+
+const onRowSwipeMove = (e: TouchEvent) => {
+  if (!isMobile.value || !rowSwipeStart) return
+  const t = e.touches[0]
+  if (!t) return
+  const dx = t.clientX - rowSwipeStart.x
+  const dy = t.clientY - rowSwipeStart.y
+  // 纵向滑动留给列表滚动，只有明显横向才算手势
+  if (Math.abs(dx) < Math.abs(dy) || Math.abs(dx) < 8) {
+    if (swipeFollow.dx) { swipeFollow.id = ''; swipeFollow.dx = 0; swipeFollow.mode = '' }
+    if (pageSwipe.active && !pageSwipe.animating) cancelPageBack()
+    return
+  }
+  rowSwipeStart.rawDx = dx
+  if (dx > 0) {
+    // 右滑 = 返回：整页跟手右滑（这一行不动）
+    swipeFollow.id = ''
+    swipeFollow.dx = 0
+    swipeFollow.mode = 'back'
+    beginPageBack(dx)
+    return
+  }
+  // 左滑 = 引用：气泡跟手滑走
+  swipeFollow.id = rowSwipeStart.id
+  swipeFollow.mode = 'quote'
+  swipeFollow.dx = -Math.min(SWIPE_MAX, Math.round(-dx * 0.85))
+}
+
+const onRowSwipeEnd = (e: TouchEvent, msg: any) => {
+  const start = rowSwipeStart
+  const dx = swipeFollow.dx
+  const mode = swipeFollow.mode
+  const rawDx = start?.rawDx || 0
+  rowSwipeStart = null
+  swipeFollow.id = ''
+  swipeFollow.dx = 0
+  swipeFollow.mode = ''
+  if (!isMobile.value || !start || start.id !== String(msg.id)) return
+  if (mode === 'quote') {
+    if (dx > -SWIPE_QUOTE_AT) return
+    // 左滑够远：引用这条消息，并把输入框拉出来
+    replyingTo.value = msg
+    nextTick(() => focusChatInput())
+    ElMessage.success('已引用这条消息')
+    return
+  }
+  if (mode === 'back') finishPageBack(rawDx)
+}
+
+// ===== 手机端：空白区域右滑退出频道 =====
+let blankSwipeStart: { x: number; y: number } | null = null
+
+const onBlankSwipeStart = (e: TouchEvent) => {
+  if (!isMobile.value) return
+  const target = e.target as HTMLElement | null
+  // 落在消息气泡 / 行上的交给「右滑」，这里只处理空白处
+  if (target?.closest?.('.chat-row')) return
+  const t = e.touches[0]
+  if (!t) return
+  blankSwipeStart = { x: t.clientX, y: t.clientY }
+}
+
+const onBlankSwipeMove = (e: TouchEvent) => {
+  if (!blankSwipeStart) return
+  const t = e.touches[0]
+  if (!t) return
+  const dx = t.clientX - blankSwipeStart.x
+  const dy = t.clientY - blankSwipeStart.y
+  // 纵向滑动（滚列表）不算
+  if (Math.abs(dy) > Math.abs(dx)) {
+    blankSwipeStart = null
+    if (pageSwipe.active && !pageSwipe.animating) cancelPageBack()
+    return
+  }
+  if (dx > 0) beginPageBack(dx)
+}
+
+const onBlankSwipeEnd = (e: TouchEvent) => {
+  const start = blankSwipeStart
+  blankSwipeStart = null
+  if (!isMobile.value || !start) return
+  const t = e.changedTouches[0]
+  if (!t) return
+  const dx = t.clientX - start.x
+  const dy = t.clientY - start.y
+  const horizontal = Math.abs(dx) > Math.abs(dy)
+  finishPageBack(horizontal ? dx : 0)
+}
+
+// ===== 电脑端：按住拖动框选（Windows 资源管理器那种虚线选择框）=====
+// 按住左键拖出一个虚线框，凡是和框相交的消息都会被选中（进入多选模式）
+const selectBox = reactive({ active: false, left: 0, top: 0, width: 0, height: 0 })
+let dragSelect: { startX: number; startY: number; x: number; y: number; inBubble: boolean; active: boolean } | null = null
+
+// 消息区域（滚动容器）的屏幕位置：选择框的坐标都相对它来算
+const messageAreaEl = () => (messageAreaRef.value as HTMLElement | null) || null
+const messageAreaRect = () => messageAreaEl()?.getBoundingClientRect() || null
+
+const resetSelectBox = () => {
+  selectBox.active = false
+  selectBox.left = 0
+  selectBox.top = 0
+  selectBox.width = 0
+  selectBox.height = 0
+}
+
+const updateSelectBox = (curX: number, curY: number) => {
+  const drag = dragSelect
+  const rect = messageAreaRect()
+  if (!drag || !rect) return
+  selectBox.left = Math.min(drag.startX, curX) - rect.left
+  selectBox.top = Math.min(drag.startY, curY) - rect.top
+  selectBox.width = Math.abs(curX - drag.startX)
+  selectBox.height = Math.abs(curY - drag.startY)
+  selectBox.active = true
+}
+
+// 框到的消息全部选中（用矩形相交判断，和 Windows 的选择框一致）
+const selectRowsInBox = () => {
+  const rect = messageAreaRect()
+  if (!rect) return [] as string[]
+  const box = {
+    left: rect.left + selectBox.left,
+    top: rect.top + selectBox.top,
+    right: rect.left + selectBox.left + selectBox.width,
+    bottom: rect.top + selectBox.top + selectBox.height
+  }
+  const ids: string[] = []
+  document.querySelectorAll('.chat-row[data-id]').forEach((el) => {
+    const r = (el as HTMLElement).getBoundingClientRect()
+    if (r.bottom < box.top || r.top > box.bottom || r.right < box.left || r.left > box.right) return
+    const id = (el as HTMLElement).getAttribute('data-id')
+    if (id) ids.push(String(id))
+  })
+  setMultiSelected(ids)
+  return ids
+}
+
+const onRowMouseDown = (e: MouseEvent) => {
+  if (isMobile.value || e.button !== 0) return
+  const target = e.target as HTMLElement | null
+  // 交互元素上的按下不参与框选（按钮 / 链接 / 图片 / 输入框…）
+  if (target?.closest?.('button, a, input, textarea, video, audio, .chat-file-card, .chat-menu, .chat-md-preview a')) return
+  dragSelect = {
+    startX: e.clientX,
+    startY: e.clientY,
+    x: e.clientX,
+    y: e.clientY,
+    inBubble: !!target?.closest?.('.chat-bubble'),
+    active: false
+  }
+  resetSelectBox()
+}
+
+const onDragMove = (e: MouseEvent) => {
+  const drag = dragSelect
+  if (!drag) return
+  const dx = e.clientX - drag.startX
+  const dy = e.clientY - drag.startY
+  if (!drag.active) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return
+    // 气泡里拖动默认交给浏览器选文字；只有明显横向拖动才当成框选
+    if (drag.inBubble && !(Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy))) {
+      dragSelect = null
+      return
+    }
+    drag.active = true
+    multiMode.value = true
+  }
+  // 接管鼠标：避免同时选中文字
+  e.preventDefault()
+  updateSelectBox(e.clientX, e.clientY)
+  selectRowsInBox()
+}
+
+const onDragEnd = () => {
+  const drag = dragSelect
+  dragSelect = null
+  if (!drag) return
+  if (!drag.active) {
+    resetSelectBox()
+    return
+  }
+  const ids = selectRowsInBox()
+  resetSelectBox()
+  // 一个都没框到就别停在多选模式里
+  if (!ids.length) multiMode.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', onDragEnd)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', onDragEnd)
+})
+
 // ========== 生命周期 ==========
 
 onMounted(() => {
@@ -3876,15 +4252,25 @@ onMounted(() => {
   document.addEventListener('click', onDocumentImageClick, true)
   document.addEventListener('click', onDocumentVoiceClick, true)
   document.addEventListener('error', onDocumentMediaError, true)
+  // 拖频道：用指针事件自己实现（不用原生拖拽，原生拖拽拖出窗口会把页面挂住）
+  window.addEventListener('pointermove', onChannelPointerMove)
+  window.addEventListener('pointerup', onChannelPointerEnd)
+  window.addEventListener('pointercancel', clearChannelDragState)
   // 深链：?bot=<selfId>&channel=<channelId>（「打开独立聊天窗口」用的就是它）
   // 沙盒窗口由 chat-logic 在数据加载完成后自行进入（同样的深链参数），这里不重复处理
   try {
     const q = new URLSearchParams(location.search)
     const qBot = q.get('bot')
     const qChannel = q.get('channel')
-    if (qBot && qChannel && !props.sandbox && !sandboxEnabled.value) {
-      nextTick(() => { void selectChannel(qChannel, qBot) })
+    const start = () => {
+      if (qBot && qChannel && !props.sandbox && !sandboxEnabled.value) {
+        nextTick(() => { void selectChannel(qChannel, qBot) })
+      }
     }
+    // 必须等元数据加载完再选频道：否则首屏历史会在 loadInitialData 之前加载，
+    // 频道选择与分页状态可能被打乱（表现为「打开窗口看到的是旧消息」）
+    if (dataReady.value) start()
+    else watch(dataReady, (ready) => { if (ready) start() }, { once: true })
   } catch { /* 忽略非法 URL */ }
 })
 
@@ -3945,9 +4331,25 @@ const dropTargetKey = ref('')
 let dragDepth = 0
 
 // ===== 频道拖到浏览器窗口外 → 打开独立窗口 =====
+// 这里刻意「不用」原生 HTML5 拖拽：原生拖拽一旦拖出浏览器窗口，
+// Chrome 的拖拽会话会把整个页面挂住（拖到软件外面松手就整页无响应），
+// 改成按下 + 指针捕获自己算位移：既不会进入原生拖拽会话，也能可靠判断
+// 「指针跑到窗口外面了」，松手时再开新窗口。
 const channelDragging = ref(false)
 const channelDragName = ref('')
-let channelDragTarget: any = null
+const channelDragResetTimer = ref<any>(null)
+let channelPointer: { x: number; y: number; channel: any; moved: boolean; leftWindow: boolean; pointerId: number } | null = null
+let suppressChannelClick = false
+
+const clearChannelDragState = () => {
+  if (channelDragResetTimer.value) {
+    clearTimeout(channelDragResetTimer.value)
+    channelDragResetTimer.value = null
+  }
+  channelDragging.value = false
+  channelDragName.value = ''
+  channelPointer = null
+}
 
 // 独立窗口地址（与控制台右键菜单「打开独立聊天窗口」一致）
 const standaloneWindowUrl = (channel: any) => {
@@ -3956,36 +4358,78 @@ const standaloneWindowUrl = (channel: any) => {
   return `${location.origin}/qq-chat/window?bot=${encodeURIComponent(bot || '')}&channel=${encodeURIComponent(String(id || ''))}`
 }
 
-const onChannelDragStart = (e: DragEvent, channel: any) => {
-  // 拖文件进来时不会触发这里的 dragstart（target 不是频道项），保险起见再判一次
-  if (isFileDrag(e)) return
-  channelDragTarget = channel
-  channelDragName.value = channelDisplayName(channel)
-  channelDragging.value = true
-  // 只放自定义类型 + text/plain：带上 text/uri-list 会被当成「拖图片」而弹出上传遮罩
+const onChannelPointerDown = (e: PointerEvent, channel: any) => {
+  if (isMobile.value || e.button !== 0 || !e.isPrimary) return
+  // 阻止默认行为：不然拖动过程中会顺带选中文字 / 触发图片原生拖拽
+  e.preventDefault()
+  channelPointer = {
+    x: e.clientX,
+    y: e.clientY,
+    channel,
+    moved: false,
+    leftWindow: false,
+    pointerId: e.pointerId
+  }
+  suppressChannelClick = false
+  // 指针捕获：拖到窗口外面也能继续收到 pointermove / pointerup
   try {
-    e.dataTransfer?.setData('application/x-qq-chat-channel', JSON.stringify({ selfId: channel.selfId, id: channel.id }))
-    e.dataTransfer?.setData('text/plain', channelDisplayName(channel))
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'
+    ;(e.currentTarget as HTMLElement)?.setPointerCapture?.(e.pointerId)
   } catch { /* 忽略 */ }
+  // 兜底：万一 pointerup 没来（系统层面丢了），提示条也不能一直挂着
+  if (channelDragResetTimer.value) clearTimeout(channelDragResetTimer.value)
+  channelDragResetTimer.value = setTimeout(clearChannelDragState, 30000)
 }
 
-const onChannelDragEnd = (e: DragEvent) => {
+const onChannelPointerMove = (e: PointerEvent) => {
+  const drag = channelPointer
+  if (!drag || e.pointerId !== drag.pointerId) return
+  const dx = e.clientX - drag.x
+  const dy = e.clientY - drag.y
+  if (!drag.moved) {
+    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return
+    drag.moved = true
+    channelDragName.value = channelDisplayName(drag.channel)
+    channelDragging.value = true
+  }
+  // 指针跑到窗口外面：clientX/clientY 会小于 0 或大于视口尺寸
+  if (e.clientX <= 1 || e.clientY <= 1 || e.clientX >= window.innerWidth - 1 || e.clientY >= window.innerHeight - 1) {
+    drag.leftWindow = true
+  }
+}
+
+const onChannelPointerEnd = (e: PointerEvent) => {
+  const drag = channelPointer
+  channelPointer = null
+  if (channelDragResetTimer.value) {
+    clearTimeout(channelDragResetTimer.value)
+    channelDragResetTimer.value = null
+  }
   channelDragging.value = false
-  const channel = channelDragTarget
-  channelDragTarget = null
-  if (!channel) return
-  const x = e.clientX
-  const y = e.clientY
-  const outside = x <= 0 || y <= 0 || x >= window.innerWidth || y >= window.innerHeight
-  // 只有松手位置在浏览器窗口之外才开新窗口（窗口内随便拖不触发）
-  if (!outside) return
+  const wasDragging = !!drag?.moved
+  const channel = drag?.channel
+  const leftWindow = !!drag?.leftWindow
+  try {
+    ;(e.currentTarget as HTMLElement)?.releasePointerCapture?.(e.pointerId)
+  } catch { /* 忽略 */ }
+  if (!wasDragging) return
+  // 拖动过就别再当成点击（否则松手会顺带切换频道）
+  suppressChannelClick = true
+  setTimeout(() => { suppressChannelClick = false }, 300)
+  if (!leftWindow || !channel) return
   const url = standaloneWindowUrl(channel)
   const name = `qq-chat-${channel.selfId || ''}-${channel.id || ''}`
   const left = Math.max(0, Math.round((window.screen.availWidth - 1040) / 2))
   const top = Math.max(0, Math.round((window.screen.availHeight - 760) / 2))
-  const win = window.open(url, name, `popup=yes,width=1040,height=760,left=${left},top=${top}`)
-  if (!win) ElMessage.warning('浏览器拦截了弹窗，请允许本站点弹出窗口')
+  // 放到下一个事件循环再开窗：在指针事件里同步 open 容易被浏览器拦
+  setTimeout(() => {
+    const win = window.open(url, name, `popup=yes,width=1040,height=760,left=${left},top=${top}`)
+    if (!win) ElMessage.warning('浏览器拦截了弹窗，请允许本站点弹出窗口')
+  }, 0)
+}
+
+const onChannelClick = (channel: any) => {
+  if (suppressChannelClick) return
+  void selectChannel(channel.id, channel.selfId)
 }
 
 // ===== v-html 生成元素的委托事件（这些元素不能带内联事件，否则会被消息注入利用） =====
@@ -4027,6 +4471,10 @@ const onDocumentImageClick = (e: MouseEvent) => {
   const img = target as HTMLImageElement
   if (img.classList.contains('qq-emoji') || (img as any).dataset?.faceId) return
   if (img.closest('.chat-composer') || img.closest('.chat-md-preview-box') || img.closest('.chat-card-msg-open')) return
+  // 卡片（B 站 / 网易云 / 小程序卡片）里的图有各自的点击行为（播放视频、放歌），
+  // 而且这里是捕获阶段监听，元素上的 @click.stop 拦不住它 ——
+  // 不排掉的话点一下卡片封面会先弹出「查看图片」预览，也会挡住卡片本身的动作。
+  if (img.closest('.chat-card-msg') || img.closest('.chat-music-card')) return
   if (!img.closest('.chat-bubble') && !img.closest('.chat-fav-body')) return
   const url = img.currentSrc || img.src
   if (!url) return
@@ -4371,6 +4819,10 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentImageClick, true)
   document.removeEventListener('click', onDocumentVoiceClick, true)
   document.removeEventListener('error', onDocumentMediaError, true)
+  window.removeEventListener('pointermove', onChannelPointerMove)
+  window.removeEventListener('pointerup', onChannelPointerEnd)
+  window.removeEventListener('pointercancel', clearChannelDragState)
+  clearChannelDragState()
 })
 
 // 导出组件（script setup 下通过 defineOptions 声明组件名；

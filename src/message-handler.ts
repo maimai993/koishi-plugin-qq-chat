@@ -1,6 +1,7 @@
 import { BotGroupState, BotInfo, ChannelInfo, MessageInfo, QuoteInfo } from './types'
 import { Context, Session, h } from 'koishi'
 import { FileManager } from './file-manager'
+import { ReadStateStore } from './read-state'
 import { Config, CONSOLE_AUTHORITY } from './config'
 import { Utils } from './utils'
 import { PluginLogger } from './logger'
@@ -26,9 +27,180 @@ export class MessageHandler {
     private ctx: Context,
     private config: Config,
     private fileManager: FileManager,
-    private logger: PluginLogger
+    private logger: PluginLogger,
+    private readState?: ReadStateStore
   ) {
     this.utils = new Utils(config)
+  }
+
+  /**
+   * 给真实机器人的发送方法包一层：before-send 已经先把消息写进历史了，
+   * 这里等真实投递结束再回写状态 ——
+   *  - 成功：从「发送中」变成已发送，并补上真实消息 id
+   *  - 失败：标记成「发送失败」（QQ 拒收、无主动推送权限、网络错误…），
+   *    否则 webui 里会把没发出去的消息当成正常消息显示
+   */
+  /** 从适配器抛出的错误里抠出人能看懂的失败原因 */
+  private describeSendError(error: any): string {
+    // 适配器常用 AggregateError：真正的失败原因在 error.errors 里
+    const fromList = Array.isArray(error?.errors)
+      ? error.errors.map((item: any) => String(item?.message || item || '')).filter(Boolean).join('; ')
+      : ''
+    const raw = fromList
+      || error?.response?.data?.message
+      || error?.response?.data?.error
+      || error?.message
+      || error?.cause?.message
+      || ''
+    const text = String(raw || '').trim()
+    if (!text || text === 'Error') return '发送失败'
+    return text.slice(0, 200)
+  }
+
+  /** 从 QQ 接口地址里推出本地频道号（/v2/groups/{id}/... 或 /v2/users/{openid}/...） */
+  private channelIdFromApiUrl(url: string): string {
+    const text = String(url || '')
+    const user = /\/v2\/users\/([^/?#]+)/i.exec(text) || /\/dms\/([^/?#]+)/i.exec(text)
+    if (user) return `private:${user[1]}`
+    const group = /\/v2\/groups\/([^/?#]+)/i.exec(text)
+    if (group) return group[1]
+    return ''
+  }
+
+  /** 从发送返回值里抠出消息 id */
+  private extractMessageId(result: any): string {
+    if (!result) return ''
+    if (Array.isArray(result)) return result[0] ? String(result[0]) : ''
+    if (typeof result === 'string') return result
+    const data = (result as any).data ?? result
+    const id = data?.id || data?.message_id || data?.msg_id || (result as any).id || (result as any).message_id
+    return id ? String(id) : ''
+  }
+
+  /**
+   * 统一的「发送出口」包装：成功回写真实消息 id，失败（含返回空数组）标记「发送失败」。
+   *
+   * 以前只包了 sendMessage / sendPrivateMessage / sendGroupMessage，可插件里还有两条
+   * 出口会真的把消息发到 QQ：
+   *   - bot.internal.*：原生 markdown、QQ 表情、上传文件、流式消息
+   *   - bot.http.post：直接打 /v2/.../messages、/files、/stream_messages、/panels
+   * 这两条路失败时不会被标记，界面上就留下一条「看起来发成功了」的消息。
+   */
+  private wrapOutgoingSender(
+    bot: any,
+    invoke: (args: any[]) => Promise<any>,
+    resolveChannelId: (args: any[]) => string
+  ) {
+    return async (...args: any[]) => {
+      // selfId 必须调用时再读：包装发生在机器人刚上线时，那时 selfId 可能还没赋值
+      const selfId = bot.selfId
+      const channelId = String(resolveChannelId(args) || '')
+      try {
+        const result = await invoke(args)
+        // 空数组 = 一条都没发出去（适配器用空数组表示失败）
+        if (channelId && Array.isArray(result) && !result.length) {
+          const message = '发送失败：QQ 没有返回消息 ID'
+          const failed = await this.fileManager.markLatestBotMessageFailed(selfId, channelId, message).catch(() => undefined)
+          if (failed) {
+            this.broadcast('bot-message-updated', {
+              channelKey: `${selfId}:${channelId}`,
+              tempId: failed.id,
+              failed: true,
+              error: message
+            })
+          }
+          return result
+        }
+        const realId = this.extractMessageId(result)
+        if (realId && channelId) {
+          const updated = await this.fileManager.markLatestBotMessageAsSent(selfId, channelId, realId).catch(() => undefined)
+          if (updated) {
+            this.broadcast('bot-message-updated', {
+              channelKey: `${selfId}:${channelId}`,
+              tempId: updated.id,
+              realId
+            })
+          }
+        }
+        return result
+      } catch (error: any) {
+        const message = this.describeSendError(error)
+        try {
+          const failed = channelId
+            ? await this.fileManager.markLatestBotMessageFailed(selfId, channelId, message)
+            : undefined
+          if (failed) {
+            this.broadcast('bot-message-updated', {
+              channelKey: `${selfId}:${channelId}`,
+              tempId: failed.id,
+              failed: true,
+              error: message.slice(0, 200)
+            })
+          }
+        } catch (err) { this.logger.warn?.('回写失败标记异常:', err) }
+        this.logger.warn?.('机器人消息发送失败:', message)
+        throw error
+      }
+    }
+  }
+
+  wrapBotSenders() {
+    for (const bot of (this.ctx.bots || []) as any[]) {
+      if (!bot || bot.platform !== 'qq' || bot.__qqChatSenderWrapped) continue
+      bot.__qqChatSenderWrapped = true
+
+      // 1) 适配器标准发送方法
+      for (const name of ['sendMessage', 'sendPrivateMessage', 'sendGroupMessage']) {
+        const original = bot[name]
+        if (typeof original !== 'function') continue
+        bot[name] = this.wrapOutgoingSender(
+          bot,
+          (args: any[]) => original.apply(bot, args),
+          (args: any[]) => String(args[0] ?? '')
+        )
+      }
+
+      // 2) bot.internal.*：只读接口放行，发送类接口包一层
+      try {
+        const internal = bot.internal
+        if (internal && typeof internal === 'object') {
+          for (const key of Object.keys(internal)) {
+            const original = internal[key]
+            if (typeof original !== 'function') continue
+            // 读 / 配置类接口不碰
+            if (/^(get|list|query|fetch|is|has|check|resolve|prepare|set|delete|remove|approve|reject|acknowledge|update)/i.test(key)) continue
+            if (!/^(send|post|upload|reply|stream|push|create|forward|put)/i.test(key)) continue
+            internal[key] = this.wrapOutgoingSender(
+              bot,
+              (args: any[]) => original.apply(internal, args),
+              (args: any[]) => {
+                const first = String(args[0] ?? '')
+                // 私聊类接口第一个参数是用户 openid，本地频道号要带 private: 前缀
+                if (/private|c2c|user|friend/i.test(key) && first && !first.startsWith('private:')) return `private:${first}`
+                return first
+              }
+            )
+          }
+        }
+      } catch (error) {
+        this.logger.warn?.('包装 internal 发送接口失败:', error)
+      }
+
+      // 3) bot.http.post：直接打 QQ 写接口的请求
+      try {
+        const http = bot.http
+        if (http && typeof http.post === 'function') {
+          const originalPost = http.post
+          http.post = this.wrapOutgoingSender(
+            bot,
+            (args: any[]) => originalPost.apply(http, args),
+            (args: any[]) => this.channelIdFromApiUrl(String(args[0] ?? ''))
+          )
+        }
+      } catch (error) {
+        this.logger.warn?.('包装 http.post 失败:', error)
+      }
+    }
   }
 
   /** 广播带 authority：启用 auth 插件后未登录的客户端收不到聊天内容 */
@@ -259,7 +431,12 @@ export class MessageHandler {
 
   updateChannelInfoToFile(session: Session): string {
     const isDirect = session.isDirect || session.channelId?.includes('private')
-    const directUserName = session.username || session.event?.user?.name || session.userId
+    // 机器人自己发的消息里 session.username 是机器人名字，
+    // 用它当「私聊对象昵称」会把频道名改成机器人自己（私聊（麦芽糖-dev）），所以先排掉
+    const isFromBot = String(session.userId || '') === String(session.selfId || '')
+    const directUserName = isFromBot
+      ? undefined
+      : (session.username || session.event?.user?.name || session.userId)
 
     const existingChannel = this.fileManager.getCachedChannelInfo(session.selfId, session.channelId)
 
@@ -602,6 +779,32 @@ export class MessageHandler {
 
       await this.fileManager.addMessageToFile(messageInfo)
 
+      // 未读持久化：消息晚于「已读水位」就计入未读，并广播给所有打开着的控制台，
+      // 这样刷新页面 / 重启后未读数还在，打开群聊也能算出未读区域的起点。
+      if (this.readState) {
+        try {
+          // 引用的是机器人自己发的消息 → 单独计「被引用」提醒
+          const quoteUserId = String(quoteInfo?.user?.id || quoteInfo?.user?.userId || '')
+          const replyToBot = !!quoteUserId && quoteUserId === String(session.selfId || '')
+          const entry = await this.readState.noteIncoming(session.selfId, session.channelId, {
+            timestamp,
+            messageId: messageInfo.id,
+            atBot: !!atBot,
+            replyToBot
+          })
+          this.broadcast('read-state-updated', {
+            selfId: session.selfId,
+            channelId: session.channelId,
+            unread: entry.unread,
+            atMe: entry.atMe,
+            reply: entry.reply,
+            lastReadTimestamp: entry.lastReadTimestamp
+          })
+        } catch (error) {
+          this.logger.warn?.('累加未读状态失败:', (error as any)?.message || error)
+        }
+      }
+
       const eventElements = await this.utils.cleanBase64ContentAsync(elements, false)
       const eventQuote = quoteInfo ? await this.utils.cleanBase64ContentAsync(quoteInfo, false) : undefined
 
@@ -639,8 +842,13 @@ export class MessageHandler {
     try {
       if (!timestamp) timestamp = Date.now()
 
+      // 频道号以「会话里的频道」为准。
+      // 旧实现无条件用 setCorrectChannelId 缓存的值，而那个缓存是「webui 最后一次
+      // 发消息的频道」，一个机器人只有一份 —— 于是别人在别的群触发指令、机器人回复
+      // 时，消息全被记到那个群里（表现为「消息跑到随机群」）。
+      // 缓存现在只作为会话频道号缺失时的兜底。
       const correctChannelId = this.getCorrectChannelId(session.selfId)
-      const finalChannelId = correctChannelId || session.channelId
+      const finalChannelId = session.channelId || correctChannelId
 
       this.updateBotInfoToFile(session)
 
@@ -793,7 +1001,14 @@ export class MessageHandler {
     }
 
     if (isDirect) {
-      return !directUserName && (!existingChannel || existingChannel.name.includes('未知'))
+      // 原来这里写反了：只有「拿不到对方昵称」时才刷新，于是即使后来从私聊消息里
+      // 拿到了昵称，存下来的名字也永远停在「私聊（未知用户）」，再也不会被纠正。
+      // 正确判据是：存的名字还是占位（或压根没存过）就该刷新。
+      const storedName = String(existingChannel?.name || '')
+      const storedIsPlaceholder = !storedName
+        || storedName.includes('未知')
+        || storedName === channelId
+      return storedIsPlaceholder
     }
 
     return !existingChannel?.guildName || existingChannel.guildName === channelId || !existingChannel?.botState
@@ -1031,12 +1246,14 @@ export class MessageHandler {
     guildName: string
   ) {
     if (isDirect) {
+      const storedName = String(existingChannel?.name || '')
       if (directUserName && directUserName !== session.userId) {
         return `私聊（${directUserName}）`
       }
 
-      if (existingChannel?.name && !existingChannel.name.includes('未知')) {
-        return existingChannel.name
+      // 没有新昵称时保留已有名字（占位的除外）
+      if (storedName && !storedName.includes('未知') && storedName !== session.channelId) {
+        return storedName
       }
 
       if (session.platform && session.platform.toLowerCase().includes('sandbox')) {

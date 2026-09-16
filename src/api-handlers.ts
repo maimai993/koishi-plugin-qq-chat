@@ -7,6 +7,7 @@ import * as mime from 'mime-types'
 
 import { FileManager } from './file-manager'
 import { MessageHandler } from './message-handler'
+import { ReadStateStore } from './read-state'
 import { Config, CONSOLE_AUTHORITY } from './config'
 import { PluginLogger } from './logger'
 import {
@@ -33,7 +34,8 @@ export class ApiHandlers {
     private config: Config,
     private fileManager: FileManager,
     private messageHandler: MessageHandler,
-    private logger: PluginLogger
+    private logger: PluginLogger,
+    private readState?: ReadStateStore
   ) {}
   /**
    * 统一注册控制台监听：带上 authority。
@@ -184,6 +186,10 @@ export class ApiHandlers {
         return { success: false, error: '没有可发送的内容' };
       const result = await bot.sendMessage(channelId, elements);
       const messageId = Array.isArray(result) ? result[0] : result;
+      if (!messageId) {
+        await this.markSendFailed(selfId, channelId, '发送失败：未收到消息 ID');
+        return { success: false, error: '发送失败：QQ 没有返回消息 ID' };
+      }
       return { success: true, messageId };
     }
     catch (error) {
@@ -225,6 +231,31 @@ export class ApiHandlers {
       return name ? `<at id="${id}" name="${name}"/>` : `<at id="${id}"/>`;
     });
   }
+  /**
+   * 发送没拿到消息 id = 实际上没发出去。
+   * 这时候必须把刚记下的那条机器人消息标成「发送失败」，
+   * 否则界面只弹一个报错提示，消息本身却看起来像正常发出去了。
+   */
+  private async markSendFailed(selfId: string, channelId: string, reason: string) {
+    const text = String(reason || '发送失败').slice(0, 200)
+    try {
+      const failed = await this.fileManager.markLatestBotMessageFailed(selfId, channelId, text)
+      if (failed) {
+        this.broadcast('bot-message-updated', {
+          channelKey: `${selfId}:${channelId}`,
+          tempId: failed.id,
+          failed: true,
+          error: text
+        })
+      }
+      return failed
+    }
+    catch (error) {
+      this.logger.warn('回写发送失败标记异常:', error)
+      return undefined
+    }
+  }
+
   // 是否私聊（QQ 单聊）频道：channelId 形如 `private:{user_openid}`
   isDirectChannel(channelId) {
     return String(channelId || '').startsWith('private:');
@@ -364,6 +395,70 @@ export class ApiHandlers {
       catch (error) {
         this.logger.error('获取频道消息数量失败:', error);
         return { success: false, error: this.getClientErrorMessage(error), counts: {} };
+      }
+    });
+    // 频道列表的「最后一条消息」预览：打开控制台时内存里没有消息，
+    // 由这一个接口批量补齐，避免每个频道各发一次请求
+    this.addListener('get-channel-previews', async (data) => {
+      try {
+        const list = Array.isArray(data?.channels) ? data.channels : [];
+        const channels = list
+          .map((item) => ({ selfId: String(item?.selfId || ''), channelId: String(item?.channelId || '') }))
+          .filter((item) => item.selfId && item.channelId);
+        const previews = await this.fileManager.getChannelPreviews(channels);
+        return { success: true, previews };
+      }
+      catch (error) {
+        this.logger.error('获取频道预览失败:', error);
+        return { success: false, error: this.getClientErrorMessage(error), previews: {} };
+      }
+    });
+    // 未读状态（持久化在 data/qq-chat/v2/read-state.json）
+    this.addListener('get-read-state', async () => {
+      try {
+        if (!this.readState) return { success: true, state: {} };
+        return { success: true, state: await this.readState.getAll() };
+      }
+      catch (error) {
+        this.logger.error('获取未读状态失败:', error);
+        return { success: false, error: this.getClientErrorMessage(error), state: {} };
+      }
+    });
+    // 打开频道：已读水位推到最新、未读清零
+    this.addListener('mark-channel-read', async (data) => {
+      try {
+        if (!this.readState || !data?.selfId || !data?.channelId) return { success: false, error: '参数不完整' };
+        const entry = await this.readState.markRead(String(data.selfId), String(data.channelId), {
+          timestamp: Number(data.timestamp) || undefined,
+          messageId: data.messageId ? String(data.messageId) : undefined
+        });
+        return { success: true, entry };
+      }
+      catch (error) {
+        this.logger.error('标记已读失败:', error);
+        return { success: false, error: this.getClientErrorMessage(error) };
+      }
+    });
+    // 右键菜单「标记未读 / 标记已读」
+    this.addListener('set-channel-unread', async (data) => {
+      try {
+        if (!this.readState || !data?.selfId || !data?.channelId) return { success: false, error: '参数不完整' };
+        const entry = data.unread
+          ? await this.readState.markUnread(String(data.selfId), String(data.channelId), Number(data.timestamp) || undefined, Number(data.count) || undefined)
+          : await this.readState.markRead(String(data.selfId), String(data.channelId), { timestamp: Number(data.timestamp) || undefined });
+        this.broadcast('read-state-sync', {
+          selfId: String(data.selfId),
+          channelId: String(data.channelId),
+          unread: entry.unread,
+          atMe: entry.atMe,
+          reply: entry.reply,
+          lastReadTimestamp: entry.lastReadTimestamp
+        });
+        return { success: true, entry };
+      }
+      catch (error) {
+        this.logger.error('设置未读状态失败:', error);
+        return { success: false, error: this.getClientErrorMessage(error) };
       }
     });
     this.addListener('fetch-image', async (data) => {
@@ -511,6 +606,7 @@ export class ApiHandlers {
         this.logInfo('收到清理历史记录请求（已废弃，建议使用删除频道数据）:', data);
         const channelKey = `${data.selfId}:${data.channelId}`;
         const { deletedMessages } = await this.fileManager.deleteChannelData(data.selfId, data.channelId);
+        await this.readState?.forget(data.selfId, data.channelId);
         if (!deletedMessages) {
           return { success: true, message: '频道没有历史消息' };
         }
@@ -561,6 +657,16 @@ export class ApiHandlers {
         const result = await bot.sendMessage(data.channelId, parsedContent);
         this.logInfo('消息发送成功:', result);
         const messageId = Array.isArray(result) ? result[0] : result;
+        if (!messageId) {
+          // 适配器没抛异常但也没给消息 id：QQ 那边其实没发出去
+          await this.markSendFailed(data.selfId, data.channelId, warning || '发送失败：未收到消息 ID');
+          return {
+            success: false,
+            error: warning || '发送失败：QQ 没有返回消息 ID',
+            tempImageIds: data.images?.map(img => img.tempId) || [],
+            warning
+          };
+        }
         if (messageId) {
           const channelKey = `${data.selfId}:${data.channelId}`;
           const msg = await this.fileManager.markLatestBotMessageAsSent(data.selfId, data.channelId, messageId);
@@ -698,14 +804,18 @@ export class ApiHandlers {
             bot: { avatar: bot.user?.avatar, name: bot.user?.name }
           });
         }
+        if (!messageId) {
+          await this.markSendFailed(data.selfId, data.channelId, '表情发送失败：未收到消息 ID');
+        }
         return {
           success: !!messageId,
           messageId: messageId,
-          warning
+          warning: messageId ? warning : '表情发送失败：QQ 没有返回消息 ID'
         };
       }
       catch (error) {
         this.logger.error('发送 QQ 表情失败:', error);
+        await this.markSendFailed(data.selfId, data.channelId, this.getClientErrorMessage(error));
         if (this.isBotMutedError(error)) {
           const cached = this.fileManager.getCachedChannelInfo(data.selfId, data.channelId);
           const channelInfo = {
@@ -1028,10 +1138,15 @@ export class ApiHandlers {
             bot: { avatar: bot.user?.avatar, name: bot.user?.name }
           });
         }
+        if (!messageId) {
+          await this.markSendFailed(data.selfId, data.channelId, 'Markdown 发送失败：未收到消息 ID');
+          return { success: false, error: 'Markdown 发送失败：QQ 没有返回消息 ID' };
+        }
         return { success: !!messageId, messageId };
       }
       catch (error) {
         this.logger.error('发送 Markdown 消息失败:', error);
+        await this.markSendFailed(data.selfId, data.channelId, this.getClientErrorMessage(error));
         if (this.isBotMutedError(error))
           return { success: false, error: '消息发送失败：机器人被禁言（全体禁言中）' };
         if (this.isNoProactivePermissionError(error))
@@ -1170,6 +1285,7 @@ export class ApiHandlers {
       try {
         this.logInfo('收到删除机器人数据请求:', data);
         const { deletedChannels, deletedMessages } = await this.fileManager.deleteBotData(data.selfId);
+        await this.readState?.forget(data.selfId);
         this.logInfo(`机器人 ${data.selfId} 数据删除完成:`, {
           删除频道数: deletedChannels,
           删除消息数: deletedMessages
@@ -1191,6 +1307,7 @@ export class ApiHandlers {
         this.logInfo('收到删除频道数据请求:', data);
         const channelKey = `${data.selfId}:${data.channelId}`;
         const { deletedMessages } = await this.fileManager.deleteChannelData(data.selfId, data.channelId);
+        await this.readState?.forget(data.selfId, data.channelId);
         this.logInfo(`频道 ${channelKey} 数据删除完成:`, {
           删除消息数: deletedMessages
         });

@@ -87,14 +87,87 @@ export function useChatData() {
     return channelPagination.value[key] || { offset: 0, hasMore: true }
   }
 
+  // ===== 频道列表预览 =====
+  // 打开控制台时内存里一条消息都没有（get-chat-data 只返回元数据），
+  // 会话列表要默认显示「每个频道最后一条消息」，所以由后端批量读一次并缓存到这里。
+  const channelPreviews = ref<Record<string, any>>({})
+
+  const setChannelPreview = (botId: string, channelId: string, msg: any) => {
+    if (!botId || !channelId || !msg) return
+    const key = `${botId}:${channelId}`
+    const current = channelPreviews.value[key]
+    if (current && Number(current.timestamp || 0) > Number(msg.timestamp || 0)) return
+    channelPreviews.value = { ...channelPreviews.value, [key]: msg }
+  }
+
+  /** 列表预览取「内存里最新的消息」与「后端读到的最后一条」中更新的那条 */
+  const getChannelPreview = (botId: string, channelId: string) => {
+    const key = `${botId}:${channelId}`
+    const local = chatData.value.messages[key]
+    const localLast = local && local.length ? local[local.length - 1] : null
+    const remote = channelPreviews.value[key] || null
+    if (!localLast) return remote
+    if (!remote) return localLast
+    return Number(remote.timestamp || 0) > Number(localLast.timestamp || 0) ? remote : localLast
+  }
+
+  /** 批量补齐频道预览（分片请求，避免一次几百个频道） */
+  const loadChannelPreviews = async (channels?: Array<{ selfId: string, channelId: string }>, force = false) => {
+    const list = channels && channels.length
+      ? channels
+      : allChannels.value.map((c: any) => ({ selfId: c.selfId, channelId: c.id }))
+    const pending = list.filter((c: any) => c && c.selfId && c.channelId
+      && (force || !channelPreviews.value[`${c.selfId}:${c.channelId}`]))
+    if (!pending.length) return 0
+    const CHUNK = 40
+    let loaded = 0
+    for (let i = 0; i < pending.length; i += CHUNK) {
+      const part = pending.slice(i, i + CHUNK)
+      try {
+        const result = await (send as any)('get-channel-previews', { channels: part })
+        if (result?.success && result.previews) {
+          const next = { ...channelPreviews.value }
+          for (const [key, msg] of Object.entries(result.previews as Record<string, any>)) {
+            if (!msg) continue
+            const current = next[key]
+            if (current && Number(current.timestamp || 0) >= Number(msg.timestamp || 0)) continue
+            next[key] = msg
+            loaded += 1
+          }
+          channelPreviews.value = next
+        }
+      } catch { /* 预览失败不影响主流程 */ }
+    }
+    return loaded
+  }
+
   // 加载数据
   async function loadInitialData() {
     const result = await (send as any)('get-chat-data')
     if (result.success && result.data) {
+      // 注意：这里绝不能直接覆盖 messages —— get-chat-data 只返回元数据（messages 为空），
+      // 而独立窗口 / 沙盒窗口的深链会在它返回之前就先加载「最新一页」历史，
+      // 直接覆盖会把那一页清空，界面只剩随后按需加载的更早一页（表现为「打开窗口是旧消息」）。
+      const incoming = (result.data.messages || {}) as Record<string, any[]>
+      const previous = chatData.value.messages || {}
+      const merged: Record<string, any[]> = { ...incoming }
+      for (const key of Object.keys(previous)) {
+        const list = previous[key] || []
+        if (!list.length) continue
+        const exists = merged[key] || []
+        if (!exists.length) {
+          merged[key] = list
+          continue
+        }
+        const ids = new Set(exists.map((m: any) => m.id))
+        merged[key] = [...exists, ...list.filter((m: any) => !ids.has(m.id))]
+          .sort((a: any, b: any) => a.timestamp - b.timestamp)
+      }
       chatData.value = {
+        ...chatData.value,
         bots: result.data.bots || {},
         channels: result.data.channels || {},
-        messages: result.data.messages || {}
+        messages: merged
       }
       pinnedBots.value = new Set(result.data.pinnedBots || [])
       pinnedChannels.value = new Set(result.data.pinnedChannels || [])
@@ -200,10 +273,15 @@ export function useChatData() {
         systemType: msg.systemType || (msg.type === 'system' ? 'member' : undefined),
         quote: msg.quote,
         // 沙盒窗口里只在本机出现过（未真的发到 QQ）的消息：界面据此显示「发送到当前频道」
-        sandbox: msg.sandbox
+        sandbox: msg.sandbox,
+        // 真实发送失败的机器人消息：界面显示「发送失败」
+        failed: msg.failed,
+        failReason: msg.failReason
       }
       messages.push(newMsg)
       messages.sort((a, b) => a.timestamp - b.timestamp)
+      // 列表预览同步刷新（未打开的频道靠这条保持最新）
+      setChannelPreview(selfId, channelId, newMsg)
       // 不是当前查看的频道：只留最近 30 条，供会话列表预览用，避免长时间挂机内存膨胀
       if (key !== activeChannelKey.value && messages.length > KEEP_BEHIND) {
         messages.splice(0, messages.length - KEEP_BEHIND)
@@ -269,6 +347,10 @@ export function useChatData() {
     allChannels,
     getMessages,
     getPagination,
+    channelPreviews,
+    setChannelPreview,
+    getChannelPreview,
+    loadChannelPreviews,
     loadInitialData,
     loadConfig,
     addMessage,

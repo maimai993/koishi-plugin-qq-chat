@@ -45,11 +45,28 @@ export declare class FileManager {
     private readMetadata;
     private writeMetadata;
     private scheduleWrite;
+    /**
+     * 拆频道的内部 key `${selfId}:${channelId}`。
+     * 注意只能按「第一个」冒号切：私聊的 channelId 本身就带冒号（`private:<openid>`），
+     * 用 split(':') 会切出 channelId='private'，把消息写进幽灵目录 chat-history/<selfId>/private/，
+     * 而读取走的是完整 key → 刷新后消息就"消失"了。
+     */
+    private static splitChannelKey;
     private flushPendingMessages;
     cleanExcessMessages(data: ChatData): ChatData;
     addMessageToFile(messageInfo: MessageInfo): Promise<void>;
     cleanupExcessMessagesInStorage(): Promise<void>;
     getAllChannelMessageCounts(): Promise<Record<string, number>>;
+    /**
+     * 批量取「每个频道最后一条消息」：频道列表默认就要显示最后一条消息预览，
+     * 但打开控制台时内存里一条消息都没有（get-chat-data 只返回元数据），
+     * 所以由一个接口统一按需读取，避免前端为每个频道各发一次请求。
+     * 读取量很小：每个频道只读索引 + 最后一个分片。
+     */
+    getChannelPreviews(channels: Array<{
+        selfId: string;
+        channelId: string;
+    }>, concurrency?: number): Promise<Record<string, MessageInfo | null>>;
     deleteChannelData(selfId: string, channelId: string): Promise<{
         deletedMessages: number;
     }>;
@@ -92,6 +109,12 @@ export declare class FileManager {
     private countChannelMessages;
     private removeChannelStorage;
     private updateUserProfileInChannel;
+    /**
+     * 把最近一条「正在发送」的机器人消息标记为发送失败。
+     * before-send 会先把消息写进历史，真实投递失败时用它把状态改回来，
+     * 免得 webui 里出现「群里其实没发出去」的消息。
+     */
+    markLatestBotMessageFailed(selfId: string, channelId: string, error?: string): Promise<MessageInfo | undefined>;
     private findAndUpdateLatestBotMessage;
     private findAndUpdateBotMessageByTempId;
     private deduplicateMessages;

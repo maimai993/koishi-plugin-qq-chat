@@ -38,7 +38,8 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
   const {
     chatData, bots, pinnedBots, pinnedChannels, getChannels, getMessages, pluginConfig,
     loadInitialData, loadConfig, addMessage, removeMessage, loadHistory, getPagination, allChannels,
-    refreshBotState, setActiveChannel, unloadChannelMessages
+    refreshBotState, setActiveChannel, unloadChannelMessages,
+    getChannelPreview, loadChannelPreviews
   } = useChatData()
 
   // 沙盒窗口（/qq-chat/sandbox）：界面与主界面完全一致（同一个 Chat 组件、同一个真实频道、
@@ -46,6 +47,9 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
   // Koishi 中间件；机器人回复被拦截后照常画进聊天列表，点「发送到当前频道」/「编辑发送」
   // 才真的发出去，并且按原始元素发送（图片 / 语音 / 视频不会被压成纯文本）。
   const sandboxMode = computed(() => !!options.sandbox?.())
+
+  /** 基础数据（机器人 / 频道元数据）是否已加载完成：深链选频道要等它 */
+  const dataReady = ref(false)
   // 沙盒窗口里就是真实频道/机器人（所以成员、群设置、历史、@、引用等主界面功能都照常可用）
   const targetSelfId = computed(() => selectedBot.value)
   const targetChannelId = computed(() => selectedChannel.value)
@@ -524,11 +528,47 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
     channelRemarks.value = next
     persistChannelRemarks()
   }
-  // 频道显示名：优先用备注
+  // 频道名占位值（服务端早期没拿到昵称时会存成这些）
+  const isPlaceholderChannelName = (name: any, channelId?: string) => {
+    const text = String(name || '').trim()
+    if (!text) return true
+    if (channelId && text === String(channelId)) return true
+    return ['未知用户', '未知', 'unknown', 'undefined', 'null'].some(p => text.toLowerCase() === p || text.includes(p))
+  }
+
+  // 私聊对象昵称：从消息里找「不是机器人自己发的、且昵称不是裸 id」的那条
+  const directPeerName = (channel: any) => {
+    const selfId = String(channel?.selfId || selectedBot.value || '')
+    const channelId = String(channel?.id || '')
+    if (!selfId || !channelId) return ''
+    const pick = (msg: any) => {
+      if (!msg) return ''
+      const userId = String(msg.userId || '')
+      if (!userId || userId === selfId) return ''
+      const name = String(msg.username || '').trim()
+      if (!name || name === userId || isRawIdName(name)) return ''
+      return name
+    }
+    const list = getMessages(selfId, channelId) as any[]
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const hit = pick(list[i])
+      if (hit) return hit
+    }
+    return pick(getChannelPreview(selfId, channelId))
+  }
+
+  // 频道显示名：备注 → 已有名字 → 私聊用对方昵称兜底（别再显示「私聊（未知用户）」）
   const channelDisplayName = (channel: any) => {
     if (!channel) return ''
     const key = `${channel.selfId || selectedBot.value}:${channel.id}`
-    return channelRemarks.value[key] || channel.name || channel.id
+    const remark = channelRemarks.value[key]
+    if (remark) return remark
+    const raw = String(channel.name || '')
+    const isDirect = channel.isDirect || String(channel.id || '').includes('private')
+    if (!isDirect) return raw || channel.id
+    if (!isPlaceholderChannelName(raw, channel.id)) return raw
+    const peer = directPeerName(channel)
+    return peer ? `私聊（${peer}）` : '私聊'
   }
 
   // 「被引用」也算提醒：别人回复了机器人的消息
@@ -547,7 +587,7 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
     const key = `${botId}:${channelId}`
     channelSettings.botId = botId
     channelSettings.channelId = channelId
-    channelSettings.name = channel?.name || channelId
+    channelSettings.name = channel ? (channelDisplayName(channel) || channelId) : channelId
     channelSettings.remark = channelRemarks.value[key] || ''
     channelSettings.pinned = pinnedChannels.value.has(key)
     channelSettings.muted = isChannelMuted(key)
@@ -605,7 +645,8 @@ export function useChatLogic(options: { sandbox?: () => boolean } = {}) {
   const currentChannelName = computed(() => {
     const c = currentChannels.value.find(i => i.id === selectedChannel.value && i.selfId === selectedBot.value)
     if (!c) return ''
-    return channelRemarks.value[`${c.selfId}:${c.id}`] || c.name
+    // 走统一的取名逻辑：私聊在还没拿到昵称时会用对方昵称兜底，而不是「私聊（未知用户）」
+    return channelDisplayName(c)
   })
 
   // 输入框是否禁用：私聊不禁用；群聊中仅当机器人不在群 / 群处于全员禁言（全体禁言）时禁用。
@@ -707,6 +748,129 @@ const unreadTotal = computed(() => {
     if (isReplyToBotEvent(ev)) replyMeCounts[key] = (replyMeCounts[key] || 0) + 1
   }
 
+  // ===== 未读状态（服务端持久化在 data/qq-chat/v2/read-state.json）=====
+  // readStateMap: 服务端权威的未读状态；unreadCounts/atMeCounts 是界面用的即时值
+  const readStateMap = ref<Record<string, any>>({})
+
+  const applyReadState = (state: Record<string, any>) => {
+    if (!state) return
+    readStateMap.value = { ...readStateMap.value, ...state }
+    for (const [key, entry] of Object.entries(state)) {
+      const unread = Number((entry as any)?.unread || 0)
+      const atMe = Number((entry as any)?.atMe || 0)
+      const reply = Number((entry as any)?.reply || 0)
+      unreadCounts[key] = unread
+      if (atMe > 0) atMeCounts[key] = atMe
+      else delete atMeCounts[key]
+      if (reply > 0) replyMeCounts[key] = reply
+      else delete replyMeCounts[key]
+    }
+    refreshTitle()
+  }
+
+  // 未读状态只拉一次并缓存住 promise：打开频道时要等它，否则深链自动进频道时
+  // 还没拿到未读数，未读区域就算不出来了（表现为刷新后看不到「以下为新消息」）
+  let readStatePromise: Promise<void> | null = null
+  const loadReadState = async (force = false) => {
+    if (force) readStatePromise = null
+    if (!readStatePromise) {
+      readStatePromise = (async () => {
+        try {
+          const result = await (send as any)('get-read-state')
+          if (result?.success) applyReadState(result.state || {})
+        } catch { /* 拉不到就沿用本地计数 */ }
+      })()
+    }
+    await readStatePromise
+  }
+
+  /** 打开频道 / 手动已读：本地立即清零，服务端水位推到最新 */
+  const markChannelRead = async (botId: string, channelId: string, timestamp?: number) => {
+    const key = `${botId}:${channelId}`
+    unreadCounts[key] = 0
+    atMeCounts[key] = 0
+    replyMeCounts[key] = 0
+    readStateMap.value = {
+      ...readStateMap.value,
+      [key]: { ...(readStateMap.value[key] || {}), unread: 0, atMe: 0, reply: 0, lastReadTimestamp: Number(timestamp) || Date.now() }
+    }
+    refreshTitle()
+    try {
+      await (send as any)('mark-channel-read', { selfId: botId, channelId, timestamp })
+    } catch { /* 失败也无所谓，下次打开会重新标记 */ }
+  }
+
+  // ===== 打开群聊时的「未读区域」=====
+  // 打开之前先记下未读数与已读水位，进入后用它在第一条未读消息前画分割线，
+  // 并提供「N 条新消息」箭头一键跳回去。
+  const unreadAnchor = ref<{ key: string, count: number, firstId: string } | null>(null)
+  const unreadJumpActive = ref(false)
+  let pendingUnread: { key: string, count: number, watermark: number } | null = null
+
+  const buildUnreadAnchor = () => {
+    const pending = pendingUnread
+    pendingUnread = null
+    const key = `${selectedBot.value}:${selectedChannel.value}`
+    if (!pending || pending.key !== key || !pending.count) {
+      unreadAnchor.value = null
+      return
+    }
+    const list = currentMessages.value as any[]
+    if (!list.length) {
+      unreadAnchor.value = null
+      return
+    }
+    let first: any = null
+    if (pending.watermark > 0) first = list.find((m: any) => Number(m.timestamp || 0) > pending.watermark) || null
+    if (!first) first = list[Math.max(0, list.length - pending.count)] || null
+    if (!first) {
+      unreadAnchor.value = null
+      return
+    }
+    unreadAnchor.value = { key, count: pending.count, firstId: String(first.id) }
+    nextTick(() => refreshUnreadJump())
+  }
+
+  const querySelectorSafe = (id: string) => {
+    const escaped = (typeof CSS !== 'undefined' && (CSS as any).escape) ? (CSS as any).escape(id) : id.replace(/["\\]/g, '\\$&')
+    return document.querySelector(`[data-id="${escaped}"]`) as HTMLElement | null
+  }
+
+  /** 跳到未读区域（第一条未读消息） */
+  const jumpToUnread = () => {
+    const anchor = unreadAnchor.value
+    const wrap = resolveScrollWrap()
+    if (!anchor || !wrap) return
+    const node = querySelectorSafe(anchor.firstId)
+    if (!node) return
+    scrollRestoreToken += 1
+    const wrapRect = wrap.getBoundingClientRect()
+    const nodeRect = node.getBoundingClientRect()
+    wrap.scrollTop += (nodeRect.top - wrapRect.top) - 8
+    unreadJumpActive.value = false
+    // 闪一下，让用户看清未读区域的起点
+    node.classList.add('is-unread-flash')
+    setTimeout(() => node.classList.remove('is-unread-flash'), 1600)
+  }
+
+  /** 未读分割线不在视野里时才显示「N 条新消息」箭头 */
+  const refreshUnreadJump = () => {
+    const anchor = unreadAnchor.value
+    if (!anchor) {
+      unreadJumpActive.value = false
+      return
+    }
+    const wrap = resolveScrollWrap()
+    const node = document.querySelector('.chat-unread-divider') as HTMLElement | null
+    if (!wrap || !node) {
+      unreadJumpActive.value = false
+      return
+    }
+    const wrapRect = wrap.getBoundingClientRect()
+    const rect = node.getBoundingClientRect()
+    unreadJumpActive.value = rect.bottom < wrapRect.top + 12 || rect.top > wrapRect.bottom - 12
+  }
+
   // 聚焦聊天输入框（兼容旧 el-input textarea 与富文本输入框），并把光标移到末尾
   const focusChatInput = () => {
     const root: any = inputRef.value
@@ -750,11 +914,24 @@ const unreadTotal = computed(() => {
     // 群聊不支持流式发送，切到群聊自动回到普通模式
     if (!isDirectChat.value && streamMode.value !== 'off') streamMode.value = 'off'
     if (selectedBot.value) {
-      unreadCounts[`${selectedBot.value}:${id}`] = 0
-      atMeCounts[`${selectedBot.value}:${id}`] = 0
+      // 等未读状态就绪再取快照（深链 / 首屏打开时它可能还没拉回来）
+      await loadReadState()
+      const key = `${selectedBot.value}:${id}`
+      // 先记下未读区域：下面就把未读清零了，分割线/箭头还要靠这份快照
+      const entry = readStateMap.value[key]
+      pendingUnread = {
+        key,
+        count: Number(entry?.unread || 0),
+        watermark: Number(entry?.lastReadTimestamp || 0)
+      }
+      unreadAnchor.value = null
+      unreadJumpActive.value = false
+      unreadCounts[key] = 0
+      atMeCounts[key] = 0
       refreshTitle()
       // 进入群聊时刷新机器人（自身）在群内的状态（是否接收主动推送 / 群成员角色）
       void refreshBotState(selectedBot.value, id)
+      void markChannelRead(selectedBot.value, id)
     }
     if (isMobile.value) mobileView.value = 'messages'
 
@@ -764,11 +941,21 @@ const unreadTotal = computed(() => {
     }
 
     await nextTick()
-    scrollToBottom()
-
-    // 针对图片加载导致的滚动偏移，在 300ms 和 800ms 后再次校准底部
-    setTimeout(scrollToBottom, 300)
-    setTimeout(scrollToBottom, 800)
+    buildUnreadAnchor()
+    if (unreadAnchor.value) {
+      // 有未读：直接停在未读区域（第一条未读消息处），箭头随时可以跳回来。
+      // 图片/视频是异步加载的，加载完会把内容顶下去，所以稍后再校准两次，
+      // 保证分割线始终停在视野里（否则会出现「打开后看不到未读区域」）。
+      await nextTick()
+      jumpToUnread()
+      setTimeout(() => { if (unreadAnchor.value) jumpToUnread() }, 500)
+      setTimeout(() => { if (unreadAnchor.value) jumpToUnread() }, 1600)
+    } else {
+      scrollToBottom()
+      // 针对图片加载导致的滚动偏移，在 300ms 和 800ms 后再次校准底部
+      setTimeout(scrollToBottom, 300)
+      setTimeout(scrollToBottom, 800)
+    }
   }
 
   const goBack = () => {
@@ -841,29 +1028,65 @@ const unreadTotal = computed(() => {
     a.click()
   }
 
-  const scrollToBottom = () => {
-    if (scrollRef.value) {
-      const wrap = scrollRef.value.wrapRef
-      if (wrap) wrap.scrollTop = wrap.scrollHeight
+  /**
+   * 取消息列表真正的滚动容器。
+   * scrollRef.value.wrapRef 在某些时序下会指向一个已经不在文档里的旧节点
+   * （往里写 scrollTop 毫无效果，表现为「回到底部按钮点了没反应」），
+   * 所以优先按稳定类名从文档里找，找不到再退回组件 ref。
+   */
+  const resolveScrollWrap = (): HTMLElement | null => {
+    const live = document.querySelector('.chat-message-scroll .el-scrollbar__wrap') as HTMLElement | null
+    if (live) return live
+    const fromRef = scrollRef.value?.wrapRef as HTMLElement | undefined
+    return fromRef && fromRef.isConnected ? fromRef : null
+  }
+
+  /** 是否显示「回到最新消息」按钮：滚离底部一定距离就显示 */
+  const showScrollToBottom = ref(false)
+  // 加载更早历史时为了保证视觉位置不变会还原 scrollTop；
+  // 如果这期间用户点了「回到最新消息」，就用这个令牌作废那次还原
+  let scrollRestoreToken = 0
+  const SCROLL_BOTTOM_THRESHOLD = 240
+  const refreshScrollButton = () => {
+    const wrap = resolveScrollWrap()
+    if (!wrap) return
+    const distance = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight
+    showScrollToBottom.value = distance > SCROLL_BOTTOM_THRESHOLD
+    // 已经翻到最底下、并且分割线确实被翻到上面去了 → 未读读完了，撤掉分割线与箭头。
+    // 注意：内容不足一屏（不能滚动）时不能撤，否则短会话里的未读分割线一出现就没了。
+    if (distance <= 40 && unreadAnchor.value && wrap.scrollHeight > wrap.clientHeight + 80) {
+      const node = document.querySelector('.chat-unread-divider') as HTMLElement | null
+      const rect = node?.getBoundingClientRect()
+      if (rect && rect.bottom < wrap.getBoundingClientRect().top) unreadAnchor.value = null
     }
+    refreshUnreadJump()
+  }
+
+  const scrollToBottom = () => {
+    scrollRestoreToken += 1
+    const wrap = resolveScrollWrap()
+    if (wrap) wrap.scrollTop = wrap.scrollHeight
+    showScrollToBottom.value = false
   }
 
   // 距离顶部还有 260px 就提前加载上一页，避免看到"加载中"的空窗
   const HISTORY_PREFETCH_PX = 260
 
   const handleScroll = async ({ scrollTop }: { scrollTop: number }) => {
+    refreshScrollButton()
     if (scrollTop <= HISTORY_PREFETCH_PX && !isLoadingHistory.value && selectedBot.value && selectedChannel.value) {
       const pagination = getPagination(selectedBot.value, selectedChannel.value)
       if (pagination.hasMore) {
         isLoadingHistory.value = true
-        const wrap = scrollRef.value?.wrapRef
+        const wrap = resolveScrollWrap()
         const oldHeight = wrap?.scrollHeight || 0
+        const token = ++scrollRestoreToken
 
         await loadHistory(selectedBot.value, selectedChannel.value)
 
         await nextTick()
-        // 保持滚动位置
-        if (wrap) {
+        // 保持滚动位置（若期间用户点了「回到最新消息」，这次还原就作废）
+        if (wrap && token === scrollRestoreToken) {
           wrap.scrollTop = wrap.scrollHeight - oldHeight
         }
         isLoadingHistory.value = false
@@ -1250,6 +1473,54 @@ const unreadTotal = computed(() => {
     } finally {
       sandboxSending.value = false
     }
+  }
+
+  // ===== 以 Markdown 发送到当前频道 =====
+  // 沙盒里跑指令时，插件产出的原生 markdown（如 help-md 的菜单）会被拦截成文本，
+  // 直接转发会丢掉格式；这个入口把它按 QQ 原生 markdown 发出去。
+  const mdChannelSending = ref(false)
+  const sendMarkdownToChannel = async (text: string, hint = '') => {
+    const content = String(text || '').trim()
+    if (!targetSelfId.value || !targetChannelId.value) {
+      ElMessage.warning('请先选择频道')
+      return false
+    }
+    if (!content) {
+      ElMessage.warning(hint || '没有可发送的 Markdown 内容')
+      return false
+    }
+    if (mdChannelSending.value) return false
+    mdChannelSending.value = true
+    try {
+      const res = await (send as any)('send-md', {
+        selfId: targetSelfId.value,
+        channelId: targetChannelId.value,
+        content,
+      })
+      if (res?.success) {
+        ElMessage.success('已以 Markdown 格式发送到当前频道')
+        // 发出去之后清空输入框，给个明确的反馈（和普通发送一致）
+        inputText.value = ''
+        return true
+      }
+      ElMessage.error(res?.error || '发送失败')
+      return false
+    } catch (error: any) {
+      ElMessage.error(error?.message || '发送失败')
+      return false
+    } finally {
+      mdChannelSending.value = false
+    }
+  }
+
+  // 沙盒回复 → 适合当作 markdown 发送的文本（纯元素标记时退回可读文本）
+  const sandboxReplyMarkdown = (msg: any) => {
+    // 拦截到的原生 markdown（help-md 等）：直接取 markdown 元素里的正文
+    const mdEl = (msg?.elements || []).find((el: any) => el.type === 'markdown' || el.type === 'md')
+    if (mdEl?.attrs?.content) return String(mdEl.attrs.content)
+    const raw = String(msg?.content || '').trim()
+    if (raw && !/^<(?:img|audio|video|file|at|face|markdown)\b/i.test(raw)) return raw
+    return sandboxElementsText(msg?.elements || [])
   }
 
   // 沙盒回复：直接按元素发到真实频道（图片/语音/视频原样）
@@ -1810,13 +2081,17 @@ const unreadTotal = computed(() => {
       ElMessage.success('已复制群号')
     } else if (action === 'mark-unread') {
       const key = `${botId}:${id}`
+      // 未读区域从「最后一条消息」开始，并持久化到后端（刷新后角标还在）
+      const last = getChannelPreview(botId, String(id)) as any
+      const timestamp = Number(last?.timestamp || 0) || undefined
       unreadCounts[key] = Math.max(1, Number(unreadCounts[key] || 0))
       refreshTitle()
+      try {
+        await (send as any)('set-channel-unread', { selfId: botId, channelId: id, unread: true, timestamp })
+      } catch { /* 失败只影响持久化 */ }
       ElMessage.success('已标记为未读')
     } else if (action === 'mark-read') {
-      unreadCounts[`${botId}:${id}`] = 0
-      atMeCounts[`${botId}:${id}`] = 0
-      refreshTitle()
+      await markChannelRead(botId, String(id))
     } else if (action === 'open-standalone') {
       // 独立窗口走 /qq-chat/window，只渲染这一个频道（不带控制台外壳）
       const url = `${location.origin}/qq-chat/window?bot=${encodeURIComponent(botId)}&channel=${encodeURIComponent(String(id))}`
@@ -1973,6 +2248,10 @@ const unreadTotal = computed(() => {
     if (!multiMode.value) multiSelected.value = []
   }
   const isMultiSelected = (id: string) => multiSelected.value.includes(id)
+  /** 直接把选中集合设为给定的 id 列表（拖动框选用） */
+  const setMultiSelected = (ids: string[]) => {
+    multiSelected.value = [...new Set(ids)]
+  }
   const toggleMultiSelect = (id: string) => {
     multiSelected.value = multiSelected.value.includes(id)
       ? multiSelected.value.filter(x => x !== id)
@@ -2820,6 +3099,16 @@ const unreadTotal = computed(() => {
 
     await loadConfig()
     await loadInitialData()
+    // 基础数据就绪（深链选频道要等它，否则会和 loadInitialData 抢时序）
+    dataReady.value = true
+
+    // 未读状态（持久化在后端）+ 频道列表预览（每个频道最后一条消息）
+    void loadReadState()
+    void loadChannelPreviews()
+    const previewTimer = setInterval(() => {
+      void loadChannelPreviews(undefined, true)
+    }, 90000)
+    dispose.push(() => clearInterval(previewTimer))
 
     // 沙盒窗口 / 控制台沙盒模式深链：/qq-chat/sandbox?bot=<selfId>&channel=<channelId>
     // 等基础数据加载完再进入，避免和 loadInitialData 抢频道选择
@@ -2841,6 +3130,8 @@ const unreadTotal = computed(() => {
       markUnreadIfNotActive(ev)
       markAtMeIfNotActive(ev)
       pushNotification(ev)
+      // 内容变长后「离底部多远」会变，刷新一下回到最新按钮
+      nextTick(refreshScrollButton)
       if (ev.selfId === selectedBot.value && ev.channelId === selectedChannel.value) {
         // 只有在底部附近才自动滚动
         const wrap = scrollRef.value?.wrapRef
@@ -2860,6 +3151,46 @@ const unreadTotal = computed(() => {
     })
     if (typeof d2 === 'function') dispose.push(d2)
 
+    // 服务端累加的未读（消息到达时 / 标记已读时广播）
+    const d5 = receive('read-state-updated', (payload: any) => {
+      if (!payload?.selfId || !payload?.channelId) return
+      const key = `${payload.selfId}:${payload.channelId}`
+      readStateMap.value = {
+        ...readStateMap.value,
+        [key]: {
+          ...(readStateMap.value[key] || {}),
+          unread: Number(payload.unread || 0),
+          atMe: Number(payload.atMe || 0),
+          reply: Number(payload.reply || 0),
+          lastReadTimestamp: Number(payload.lastReadTimestamp || 0)
+        }
+      }
+      const isActive = payload.selfId === selectedBot.value && payload.channelId === selectedChannel.value
+      if (isActive) {
+        // 正看着这个频道：立即回写已读，角标不闪
+        void markChannelRead(payload.selfId, payload.channelId)
+      } else {
+        unreadCounts[key] = Number(payload.unread || 0)
+        if (Number(payload.atMe || 0) > 0) atMeCounts[key] = Number(payload.atMe)
+        if (Number(payload.reply || 0) > 0) replyMeCounts[key] = Number(payload.reply)
+        refreshTitle()
+      }
+    })
+    if (typeof d5 === 'function') dispose.push(d5)
+
+    const d6 = receive('read-state-sync', (payload: any) => {
+      if (!payload?.selfId || !payload?.channelId) return
+      const key = `${payload.selfId}:${payload.channelId}`
+      readStateMap.value = { ...readStateMap.value, [key]: { ...(readStateMap.value[key] || {}), ...payload } }
+      unreadCounts[key] = Number(payload.unread || 0)
+      if (Number(payload.atMe || 0) > 0) atMeCounts[key] = Number(payload.atMe)
+      else delete atMeCounts[key]
+      if (Number(payload.reply || 0) > 0) replyMeCounts[key] = Number(payload.reply)
+      else delete replyMeCounts[key]
+      refreshTitle()
+    })
+    if (typeof d6 === 'function') dispose.push(d6)
+
     const d3 = receive('chat-bot-message-event', (ev: any) => {
       addMessage(ev)
       markUnreadIfNotActive(ev)
@@ -2877,7 +3208,12 @@ const unreadTotal = computed(() => {
       const msg = currentMessages.value.find(m => m.id === data.tempId)
       if (msg) {
         msg.sending = false
-        msg.realId = data.realId
+        if (data.realId) msg.realId = data.realId
+        // 真实投递失败：界面上标出来，别让它看起来像发出去了
+        if (data.failed) {
+          msg.failed = true
+          msg.failReason = String(data.error || '')
+        }
       }
     })
     if (typeof d4 === 'function') dispose.push(d4)
@@ -2946,6 +3282,15 @@ const unreadTotal = computed(() => {
     unreadCounts,
     atMeCounts,
     unreadTotal,
+    readStateMap,
+    loadReadState,
+    markChannelRead,
+    unreadAnchor,
+    unreadJumpActive,
+    jumpToUnread,
+    refreshUnreadJump,
+    getChannelPreview,
+    loadChannelPreviews,
 
     // 配置
     pluginConfig,
@@ -2983,6 +3328,7 @@ const unreadTotal = computed(() => {
     removeCommandResultElement,
     // 沙盒窗口（/qq-chat/sandbox）
     sandboxMode,
+    dataReady,
     targetSelfId,
     targetChannelId,
     enterSandbox,
@@ -2990,6 +3336,9 @@ const unreadTotal = computed(() => {
     sandboxSending,
     forwardSandboxMessage,
     sandboxForwarding,
+    sendMarkdownToChannel,
+    sandboxReplyMarkdown,
+    mdChannelSending,
     clearSandboxWindow,
     resetSandboxSession,
     elementEditorVisible,
@@ -3034,6 +3383,9 @@ const unreadTotal = computed(() => {
     handleImageWheel,
     downloadImage,
     handleScroll,
+    scrollToBottom,
+    showScrollToBottom,
+    refreshScrollButton,
     setActiveChannel,
     unloadChannelMessages,
     repeatMessage,
@@ -3058,6 +3410,7 @@ const unreadTotal = computed(() => {
     multiMode,
     multiSelected,
     toggleMultiMode,
+    setMultiSelected,
     isMultiSelected,
     toggleMultiSelect,
     exitMultiMode,
